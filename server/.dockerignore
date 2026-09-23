@@ -1,0 +1,10 @@
+.env
+.venv
+__pycache__
+*.pyc
+*.wav
+*.m4a
+*.mp3
+*.zip
+README.md
+DEPLOYMENT.md

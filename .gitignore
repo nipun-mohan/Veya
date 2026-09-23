@@ -1,0 +1,44 @@
+# Flutter and Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+
+# IDE and operating system
+.DS_Store
+.idea/
+*.iml
+
+# Android and iOS generated files
+android/.gradle/
+android/.kotlin/
+android/build/
+android/.idea/
+android/.icloud-backups/
+android/local.properties
+android/key.properties
+android/app/build/
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+
+# Server credentials and generated runtime files
+server/.env
+server/.env.*
+!server/.env.example
+server/.venv/
+server/__pycache__/
+server/*.py[cod]
+
+# Keys, certificates, and local exports
+*.jks
+*.keystore
+*.pem
+*.p12
+*.apk
+*.aab
+releases/
+
+# Local iCloud placeholders retained only for recovery
+.gitignore.icloud-placeholder
