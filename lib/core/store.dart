@@ -19,6 +19,7 @@ class VeyaStore extends ChangeNotifier {
   String language = 'en-IN', endpoint = '';
   double floatingIconScale = 1, floatingIconOpacity = .9;
   bool onboarded = false;
+  bool accessibilityConsentAccepted = false;
   List<String> allowedApps = [
     'com.whatsapp',
     'com.google.android.gm',
@@ -32,6 +33,8 @@ class VeyaStore extends ChangeNotifier {
     language = prefs.getString('language') ?? 'en-IN';
     if (!languages.any((l) => l.code == language)) language = 'en-IN';
     uiLanguage = prefs.getString('uiLanguage') ?? 'en-IN';
+    accessibilityConsentAccepted =
+        prefs.getBool('accessibilityConsentAccepted') ?? false;
     profileName = prefs.getString('profileName') ?? '';
     if (!languages.any((l) => l.code == uiLanguage)) uiLanguage = 'en-IN';
     final profile = await secure.read(key: 'veya_profile_phone');
@@ -122,6 +125,12 @@ class VeyaStore extends ChangeNotifier {
   Future<void> setProfileName(String value) async {
     profileName = value.trim();
     await prefs.setString('profileName', profileName);
+    notifyListeners();
+  }
+
+  Future<void> acceptAccessibilityConsent() async {
+    accessibilityConsentAccepted = true;
+    await prefs.setBool('accessibilityConsentAccepted', true);
     notifyListeners();
   }
 

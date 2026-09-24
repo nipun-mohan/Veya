@@ -4,6 +4,7 @@ import '../core/store.dart';
 import '../core/theme.dart';
 import '../core/platform.dart';
 import '../widgets/shared.dart';
+import 'accessibility_consent.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VeyaStore store;
@@ -44,41 +45,27 @@ class _SettingsScreenState extends State<SettingsScreen>
       return;
     }
     if (enabled) {
-      await AndroidBridge.call('openAccessibility');
+      await AndroidBridge.call('openAccessibilityForDisable');
       return;
     }
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const LText('Bring your voice to other apps'),
-        content: const SingleChildScrollView(
-          child: LText(
-            'Accessibility finds text fields in chosen apps, excluding passwords. It reads the active field only when you tap Insert, and never presses Send. Disable it anytime in Android settings.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const LText('Not now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const LText('Agree & continue'),
-          ),
-        ],
+    if (widget.store.accessibilityConsentAccepted) {
+      await _openAccessibilitySettings();
+      return;
+    }
+    if (!mounted) return;
+    final accepted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const AccessibilityConsentScreen(),
       ),
     );
-    if (accepted != true) return;
-    final mic = await AndroidBridge.call<bool>('requestMicrophone') ?? false;
-    if (!mic) {
-      if (mounted) {
-        toast(
-          context,
-          'Microphone permission is needed for the floating dictation button.',
-        );
-      }
-      return;
+    if (accepted == true) {
+      await widget.store.acceptAccessibilityConsent();
+      await _openAccessibilitySettings();
     }
+  }
+
+  Future<void> _openAccessibilitySettings() async {
     await widget.store.syncNative();
     await AndroidBridge.call('openAccessibility');
   }
@@ -207,217 +194,200 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.all(24),
+    padding: const EdgeInsets.fromLTRB(24, 22, 24, 28),
     children: [
-      const Eyebrow('JUST THE WAY YOU LIKE IT'),
-      const SizedBox(height: 10),
-      LText(
-        'Make yourself\nat home.',
-        style: Theme.of(context).textTheme.headlineLarge,
-      ),
-      const SizedBox(height: 24),
-      SurfaceCard(
-        color: VeyaColors.ink,
-        child: Row(
-          children: [
-            const VeyaMark(size: 48, dark: false),
-            const SizedBox(width: 16),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  LText(
-                    'Your everyday voice',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 17,
-                    ),
-                  ),
-                  SizedBox(height: 5),
-                  LText(
-                    'A little more clarity. A little more you.',
-                    style: TextStyle(color: Colors.white60, fontSize: 11),
-                  ),
-                ],
-              ),
+      Row(
+        children: [
+          const VeyaMark(size: 42),
+          const SizedBox(width: 8),
+          const LText(
+            'veya',
+            style: TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -1.8,
             ),
-          ],
-        ),
+          ),
+          const Spacer(),
+          const Eyebrow('JUST\nTHE WAY YOU\nLIKE IT', color: VeyaColors.ink),
+        ],
       ),
-      const SizedBox(height: 28),
-      const Eyebrow('SPEAK YOUR WAY'),
-      const SizedBox(height: 12),
+      const SizedBox(height: 32),
+      const Eyebrow('PREFERENCES', color: VeyaColors.muted),
+      const SizedBox(height: 11),
       SurfaceCard(
         padding: EdgeInsets.zero,
         child: Column(
           children: [
-            ListTile(
-              leading: const Icon(Icons.language),
-              title: const LText('Speaking language'),
-              subtitle: LText(widget.store.selectedLanguage.name),
-              trailing: const Icon(Icons.chevron_right),
+            _PreferenceRow(
+              icon: Icons.language_outlined,
+              title: 'Speaking language',
+              subtitle: widget.store.selectedLanguage.name,
               onTap: () => chooseLanguage(context, widget.store),
             ),
-            if (AndroidBridge.assistantAvailable) ...[
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.bubble_chart_outlined),
-                title: const LText('Floating assistant'),
-                subtitle: LText(
-                  enabled
-                      ? 'Enabled · tap to manage'
-                      : 'Dictate in your favourite Android apps',
-                ),
-                trailing: Icon(
-                  enabled ? Icons.check_circle : Icons.chevron_right,
-                  color: VeyaColors.teal,
-                ),
-                onTap: assistant,
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.visibility_outlined),
-                title: const LText('Show floating icon'),
-                subtitle: const LText('Restore after dragging to Hide'),
-                onTap: () async {
-                  try {
-                    await AndroidBridge.call<void>('showBubble');
-                    if (context.mounted) {
-                      toast(
-                        context,
-                        'Icon restored. Focus a text field in a selected app.',
-                      );
-                    }
-                  } catch (_) {
-                    if (context.mounted) {
-                      toast(
-                        context,
-                        'Could not restore the icon. Please try again.',
-                      );
-                    }
-                  }
-                },
-              ),
-              const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const LText(
-                      'Floating icon appearance',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        const Icon(Icons.open_in_full, size: 18),
-                        const SizedBox(width: 10),
-                        const Expanded(child: LText('Size')),
-                        Text(
-                          '${(widget.store.floatingIconScale / 1.35 * 100).round()}%',
-                        ),
-                      ],
-                    ),
-                    Slider(
-                      // 100% on the control maps to the 135% native maximum.
-                      value: widget.store.floatingIconScale / 1.35,
-                      min: .75 / 1.35,
-                      max: 1,
-                      divisions: 9,
-                      onChanged: (value) {
-                        widget.store.setFloatingIconAppearance(
-                          scale: value * 1.35,
-                        );
-                        setState(() {});
-                      },
-                      onChangeEnd: (value) => widget.store
-                          .setFloatingIconAppearance(scale: value * 1.35),
-                    ),
-                    Row(
-                      children: [
-                        const Icon(Icons.opacity, size: 18),
-                        const SizedBox(width: 10),
-                        const Expanded(child: LText('Opacity')),
-                        Text(
-                          '${(widget.store.floatingIconOpacity * 100).round()}%',
-                        ),
-                      ],
-                    ),
-                    Slider(
-                      value: widget.store.floatingIconOpacity,
-                      min: .35,
-                      max: 1,
-                      divisions: 13,
-                      onChanged: (value) {
-                        widget.store.setFloatingIconAppearance(opacity: value);
-                        setState(() {});
-                      },
-                      onChangeEnd: (value) => widget.store
-                          .setFloatingIconAppearance(opacity: value),
-                    ),
-                  ],
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.apps_rounded),
-                title: const LText('Choose your apps'),
-                subtitle: LText(
-                  '{count} apps selected',
-                  args: {'count': widget.store.allowedApps.length.toString()},
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => AppsScreen(store: widget.store),
-                  ),
-                ),
-              ),
-            ],
+            const Divider(),
+            _PreferenceRow(
+              icon: Icons.bubble_chart_outlined,
+              title: 'Floating assistant',
+              subtitle: enabled ? 'Enabled' : 'Disabled',
+              trailing: Switch(value: enabled, onChanged: (_) => assistant()),
+            ),
           ],
         ),
       ),
-      const SizedBox(height: 28),
-      ListTile(
-        leading: const Icon(Icons.person_outline),
-        title: const LText('Profile'),
-        subtitle: LText(
-          widget.store.profileName.isEmpty
-              ? (widget.store.phoneNumber.isEmpty
-                    ? 'Add your name'
-                    : widget.store.phoneNumber)
-              : '${widget.store.profileName} · ${widget.store.phoneNumber}',
-          overflow: TextOverflow.ellipsis,
+      const SizedBox(height: 13),
+      SurfaceCard(
+        padding: const EdgeInsets.fromLTRB(18, 15, 18, 13),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Eyebrow(
+                    'FLOATING ICON APPEARANCE',
+                    color: VeyaColors.muted,
+                  ),
+                ),
+                Container(
+                  width: 48,
+                  height: 48,
+                  padding: const EdgeInsets.all(9),
+                  decoration: const BoxDecoration(
+                    color: VeyaColors.mango,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const VeyaOrb(size: 30),
+                ),
+              ],
+            ),
+            _SliderRow(
+              icon: Icons.open_in_full_rounded,
+              label: 'Size',
+              value: widget.store.floatingIconScale / 1.35,
+              display:
+                  '${(widget.store.floatingIconScale / 1.35 * 100).round()}%',
+              min: .75 / 1.35,
+              onChanged: (v) {
+                widget.store.setFloatingIconAppearance(scale: v * 1.35);
+                setState(() {});
+              },
+            ),
+            _SliderRow(
+              icon: Icons.opacity_outlined,
+              label: 'Opacity',
+              value: widget.store.floatingIconOpacity,
+              display: '${(widget.store.floatingIconOpacity * 100).round()}%',
+              min: .35,
+              onChanged: (v) {
+                widget.store.setFloatingIconAppearance(opacity: v);
+                setState(() {});
+              },
+            ),
+          ],
         ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => _editProfile(context),
       ),
-      const Eyebrow('TRANSLATION'),
-      ListTile(
-        leading: const Icon(Icons.cloud_outlined),
-        title: const LText('Server translation'),
-        subtitle: Text(
-          widget.store.endpoint.isEmpty
-              ? 'Connect a Veya translation service'
-              : widget.store.endpoint,
-          overflow: TextOverflow.ellipsis,
-        ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => _editTranslationEndpoint(context),
-      ),
-      const SizedBox(height: 28),
-      const Center(child: VeyaMark(size: 32)),
-      const SizedBox(height: 10),
-      const Center(
-        child: LText(
-          'Veya 1.3.0 · Thoughtfully made for your voice.',
-          style: TextStyle(color: VeyaColors.muted, fontSize: 10),
+      const SizedBox(height: 13),
+      SurfaceCard(
+        padding: EdgeInsets.zero,
+        child: Column(
+          children: [
+            _PreferenceRow(
+              icon: Icons.person_outline_rounded,
+              title: 'Profile',
+              onTap: () => _editProfile(context),
+            ),
+            const Divider(),
+            _PreferenceRow(
+              icon: Icons.tune_rounded,
+              title: 'Translation settings',
+              onTap: () => _editTranslationEndpoint(context),
+            ),
+          ],
         ),
       ),
-      const SizedBox(height: 20),
     ],
+  );
+}
+
+class _PreferenceRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+  const _PreferenceRow({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) => ListTile(
+    contentPadding: const EdgeInsets.symmetric(horizontal: 19, vertical: 2),
+    leading: Icon(icon, size: 28, color: VeyaColors.ink),
+    title: LText(
+      title,
+      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+    ),
+    subtitle: subtitle == null
+        ? null
+        : LText(
+            subtitle!,
+            style: const TextStyle(color: VeyaColors.muted, fontSize: 12),
+          ),
+    trailing:
+        trailing ?? const Icon(Icons.chevron_right, color: VeyaColors.ink),
+    onTap: onTap,
+  );
+}
+
+class _SliderRow extends StatelessWidget {
+  final IconData icon;
+  final String label, display;
+  final double value, min;
+  final ValueChanged<double> onChanged;
+  const _SliderRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.display,
+    required this.onChanged,
+  });
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: Column(
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: VeyaColors.ink, size: 23),
+            const SizedBox(width: 13),
+            Expanded(
+              child: LText(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            LText(
+              display,
+              style: const TextStyle(color: VeyaColors.muted, fontSize: 12),
+            ),
+          ],
+        ),
+        Slider(
+          value: value,
+          min: min,
+          max: 1,
+          activeColor: VeyaColors.teal,
+          secondaryActiveColor: VeyaColors.orange,
+          thumbColor: VeyaColors.mango,
+          onChanged: onChanged,
+        ),
+      ],
+    ),
   );
 }
 

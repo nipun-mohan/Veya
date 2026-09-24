@@ -21,7 +21,6 @@ flutter:
   assets:
     - assets/i18n/
     - assets/branding/
-    - assets/brand/
   fonts:
     - family: Manrope
       fonts:

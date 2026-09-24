@@ -7,7 +7,7 @@
         android:fullBackupContent="false"
         android:networkSecurityConfig="@xml/network_security_config"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@drawable/ic_veya_launcher">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -30,6 +30,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name=".MicPermissionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/MicrophonePermissionTheme" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

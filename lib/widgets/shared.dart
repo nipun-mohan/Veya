@@ -11,16 +11,25 @@ class VeyaMark extends StatelessWidget {
   final bool dark;
   const VeyaMark({super.key, this.size = 40, this.dark = true});
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => SizedBox(
     width: size,
     height: size,
-    decoration: BoxDecoration(
-      color: dark ? VeyaColors.ink : VeyaColors.lime,
-      borderRadius: BorderRadius.circular(size * .32),
-    ),
     child: CustomPaint(
-      painter: _MarkPainter(dark ? VeyaColors.lime : VeyaColors.ink),
+      painter: _MarkPainter(dark ? VeyaColors.mango : Colors.white),
     ),
+  );
+}
+
+/// Circular companion for the floating-assistant preview.  It deliberately
+/// shares the exact V-wave measurements of [VeyaMark].
+class VeyaOrb extends StatelessWidget {
+  final double size;
+  const VeyaOrb({super.key, this.size = 40});
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: size,
+    height: size,
+    child: CustomPaint(painter: _OrbPainter()),
   );
 }
 
@@ -29,23 +38,59 @@ class _MarkPainter extends CustomPainter {
   _MarkPainter(this.color);
   @override
   void paint(Canvas c, Size s) {
-    final p = Paint()
-      ..color = color
-      ..strokeWidth = s.width * .085
+    c.drawRRect(
+      RRect.fromRectAndRadius(Offset.zero & s, Radius.circular(s.width * .28)),
+      Paint()..color = color,
+    );
+    final wave = Paint()
+      ..color = VeyaColors.ink
+      ..strokeWidth = s.width * .10
       ..strokeCap = StrokeCap.round;
-    final heights = [.20, .38, .57, .38, .20];
-    for (var i = 0; i < 5; i++) {
-      final x = s.width * (.24 + i * .13), h = s.height * heights[i];
+    // Five equal bars form the V-wave used by both the launcher and bubble.
+    // Keep the left/right bars comfortably inside the tile; this preserves the
+    // recognizable silhouette even at small Android launcher sizes.
+    const tops = [.31, .44, .57, .44, .31];
+    const bottoms = [.62, .75, .88, .75, .62];
+    for (var i = 0; i < tops.length; i++) {
+      final x = s.width * (.21 + i * .14);
       c.drawLine(
-        Offset(x, (s.height - h) / 2),
-        Offset(x, (s.height + h) / 2),
-        p,
+        Offset(x, s.height * tops[i]),
+        Offset(x, s.height * bottoms[i]),
+        wave,
       );
     }
   }
 
   @override
   bool shouldRepaint(_MarkPainter old) => old.color != color;
+}
+
+class _OrbPainter extends CustomPainter {
+  @override
+  void paint(Canvas c, Size s) {
+    c.drawCircle(
+      Offset(s.width / 2, s.height / 2),
+      s.shortestSide / 2,
+      Paint()..color = VeyaColors.mango,
+    );
+    final wave = Paint()
+      ..color = VeyaColors.ink
+      ..strokeWidth = s.width * .10
+      ..strokeCap = StrokeCap.round;
+    const tops = [.31, .44, .57, .44, .31];
+    const bottoms = [.62, .75, .88, .75, .62];
+    for (var i = 0; i < tops.length; i++) {
+      final x = s.width * (.21 + i * .14);
+      c.drawLine(
+        Offset(x, s.height * tops[i]),
+        Offset(x, s.height * bottoms[i]),
+        wave,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_OrbPainter oldDelegate) => false;
 }
 
 class SurfaceCard extends StatelessWidget {
@@ -62,7 +107,7 @@ class SurfaceCard extends StatelessWidget {
   Widget build(BuildContext context) => Material(
     color: color,
     shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(20),
       side: const BorderSide(color: VeyaColors.line),
     ),
     clipBehavior: Clip.antiAlias,

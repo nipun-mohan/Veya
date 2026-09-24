@@ -78,4 +78,7 @@ kotlin {
     jvmToolchain(17)
 }
 
-dependencies { implementation("com.squareup.okhttp3:okhttp:4.12.0") }
+dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.android.gms:play-services-auth-api-phone:18.1.0")
+}

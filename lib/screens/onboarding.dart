@@ -8,6 +8,7 @@ import '../core/platform.dart';
 import '../core/phone_profile.dart';
 import '../core/theme.dart';
 import '../widgets/shared.dart';
+import 'accessibility_consent.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VeyaStore store;
@@ -19,11 +20,14 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen>
     with WidgetsBindingObserver {
-  int step = 0, demo = 0;
+  static const _flow = [1, 2, 0, 3, 4];
+  int step = 1, demo = 0;
   bool busy = false, microphone = false, assistant = false;
+  bool otpVerified = false;
   String dial = '+91', error = '';
   final phone = TextEditingController();
   final otp = TextEditingController();
+  final otpFocus = FocusNode();
   PhoneProfile? pendingPhone;
   Timer? animation;
   String get number => '$dial${phone.text.replaceAll(RegExp(r'\D'), '')}';
@@ -32,20 +36,69 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    step = widget.store.prefs.getInt('profile_setup_step') ?? 0;
-    if (widget.replay || step < 0 || step > 4) step = 0;
+    step = widget.store.prefs.getInt('profile_setup_step') ?? 1;
+    otpVerified = widget.store.prefs.getBool('phoneOtpVerified') ?? false;
+    // New onboarding verifies the phone before language and setup choices.
+    if (step == 0 || widget.replay || !_flow.contains(step)) step = 1;
     if (step > 2 && widget.store.phoneNumber.isEmpty) step = 1;
     dial = widget.store.phoneCountryCode;
     phone.text = widget.store.phoneNationalNumber;
     animation = Timer.periodic(const Duration(seconds: 2), (_) {
       if (mounted && step == 3) setState(() => demo = (demo + 1) % 4);
     });
+    if (AndroidBridge.assistantAvailable) {
+      AndroidBridge.channel.setMethodCallHandler(_handleNativeEvent);
+      if (step == 2) {
+        Future<void>.microtask(() => AndroidBridge.call('startOtpListener'));
+      }
+    }
     refreshPermissions();
   }
 
+  Future<dynamic> _handleNativeEvent(MethodCall call) async {
+    if (call.method != 'otpReceived' || step != 2 || busy) return null;
+    final code = call.arguments?.toString() ?? '';
+    if (!RegExp(r'^\d{4}$').hasMatch(code)) return null;
+    setState(() {
+      otp.text = code;
+      error = '';
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    if (mounted && step == 2 && !busy) await verifyOtp();
+    return null;
+  }
+
   Future<void> refreshPermissions() async {
-    final enabled = await AndroidBridge.call<bool>('isEnabled') ?? false;
-    if (mounted) setState(() => assistant = enabled);
+    final values = await Future.wait([
+      AndroidBridge.call<bool>('isEnabled'),
+      AndroidBridge.call<bool>('isMicrophoneGranted'),
+    ]);
+    final enabled = values[0] ?? false;
+    final microphoneGranted = values[1] ?? false;
+    if (!mounted) return;
+    setState(() {
+      assistant = enabled;
+      microphone = microphoneGranted;
+    });
+    // Accessibility setup is the last onboarding action. Once Android reports
+    // it enabled, leave setup instead of presenting the permission row again.
+    if (enabled && step == 4 && !widget.replay) await complete();
+  }
+
+  Future<void> openAccessibilitySetup() async {
+    if (!AndroidBridge.assistantAvailable) return;
+    if (!widget.store.accessibilityConsentAccepted) {
+      final accepted = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const AccessibilityConsentScreen(),
+        ),
+      );
+      if (accepted != true) return;
+      await widget.store.acceptAccessibilityConsent();
+    }
+    await widget.store.syncNative();
+    await AndroidBridge.call('openAccessibility');
   }
 
   @override
@@ -59,6 +112,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     animation?.cancel();
     phone.dispose();
     otp.dispose();
+    otpFocus.dispose();
     super.dispose();
   }
 
@@ -68,6 +122,27 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       error = '';
     });
     await widget.store.prefs.setInt('profile_setup_step', value);
+    if (AndroidBridge.assistantAvailable) {
+      await AndroidBridge.call(
+        value == 2 ? 'startOtpListener' : 'stopOtpListener',
+      );
+    }
+  }
+
+  Future<void> advance() async {
+    final index = _flow.indexOf(step);
+    if (index < _flow.length - 1) await go(_flow[index + 1]);
+  }
+
+  Future<void> goBack() async {
+    // Language selection is the post-verification boundary. Later setup
+    // screens can return to language, but never to the phone or OTP steps.
+    if (otpVerified && step == 0) return;
+    final index = _flow.indexOf(step);
+    if (index > 0)
+      await go(_flow[index - 1]);
+    else if (widget.replay && mounted)
+      Navigator.pop(context);
   }
 
   Future<void> savePhone() async {
@@ -109,8 +184,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     });
     try {
       await widget.store.savePhone(profile, verified: true);
+      await widget.store.prefs.setBool('phoneOtpVerified', true);
+      otpVerified = true;
       if (mounted) {
-        await go(3);
+        await go(0);
       }
     } catch (_) {
       if (mounted) {
@@ -133,6 +210,167 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     if (widget.replay && mounted) Navigator.pop(context);
   }
 
+  Widget _otpScreen() => Scaffold(
+    backgroundColor: VeyaColors.paper,
+    body: SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 34),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 44,
+              height: 44,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                alignment: Alignment.centerLeft,
+                onPressed: busy ? null : () => go(1),
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
+            ),
+            const SizedBox(height: 34),
+            const Eyebrow('VERIFY YOUR NUMBER'),
+            const SizedBox(height: 14),
+            const LText(
+              'Let’s make\nsure it’s you.',
+              style: TextStyle(
+                fontSize: 39,
+                height: 1.03,
+                letterSpacing: -2.1,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 16),
+            LText(
+              'We sent a 4-digit code to\n$number',
+              style: const TextStyle(
+                color: VeyaColors.muted,
+                fontSize: 16,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 30),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: VeyaColors.line),
+              ),
+              child: Column(
+                children: [
+                  GestureDetector(
+                    onTap: () => otpFocus.requestFocus(),
+                    child: Stack(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: List.generate(
+                            4,
+                            (i) => SizedBox(
+                              width: 62,
+                              height: 62,
+                              child: _OtpCell(
+                                value: i < otp.text.length ? otp.text[i] : '',
+                                active: i == otp.text.length,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned.fill(
+                          child: Opacity(
+                            opacity: .01,
+                            child: TextField(
+                              controller: otp,
+                              focusNode: otpFocus,
+                              keyboardType: TextInputType.number,
+                              maxLength: 4,
+                              autofocus: true,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                              onChanged: (_) => setState(() => error = ''),
+                              onSubmitted: (_) {
+                                if (!busy) verifyOtp();
+                              },
+                              decoration: const InputDecoration(
+                                border: InputBorder.none,
+                                counterText: '',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (error.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: LText(
+                        error,
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 54,
+                    child: FilledButton(
+                      onPressed: busy ? null : verifyOtp,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: VeyaColors.ink,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: busy
+                          ? const CircularProgressIndicator(color: Colors.white)
+                          : const LText(
+                              'Verify code',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const LText(
+                    'Resend code in 00:24',
+                    style: TextStyle(
+                      color: VeyaColors.muted,
+                      fontSize: 13,
+                      decoration: TextDecoration.underline,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 26),
+            Center(
+              child: TextButton(
+                onPressed: busy ? null : () => go(1),
+                child: const LText(
+                  'Wrong number?  Edit number',
+                  style: TextStyle(
+                    color: VeyaColors.ink,
+                    decoration: TextDecoration.underline,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
   Widget heading(String title, String subtitle) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -154,23 +392,46 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     bool selected,
     VoidCallback select, {
     String? subtitle,
+    bool enabled = true,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
     child: Material(
-      color: selected ? VeyaColors.soft : Colors.white,
+      color: !enabled
+          ? const Color(0xFFF3F0EB)
+          : selected
+          ? VeyaColors.soft
+          : Colors.white,
       borderRadius: BorderRadius.circular(16),
       child: ListTile(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: selected ? VeyaColors.teal : Colors.black12),
+          side: BorderSide(
+            color: !enabled
+                ? Colors.black12
+                : selected
+                ? VeyaColors.teal
+                : Colors.black12,
+          ),
         ),
-        title: LText(label),
+        enabled: enabled,
+        title: LText(
+          label,
+          style: TextStyle(color: enabled ? null : VeyaColors.muted),
+        ),
         subtitle: subtitle == null ? null : LText(subtitle),
         trailing: Icon(
-          selected ? Icons.check_circle : Icons.radio_button_unchecked,
-          color: selected ? VeyaColors.teal : Colors.black26,
+          !enabled
+              ? Icons.radio_button_unchecked
+              : selected
+              ? Icons.check_circle
+              : Icons.radio_button_unchecked,
+          color: !enabled
+              ? VeyaColors.muted
+              : selected
+              ? VeyaColors.teal
+              : Colors.black26,
         ),
-        onTap: select,
+        onTap: enabled ? select : null,
       ),
     ),
   );
@@ -447,9 +708,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
             choice(
               'Floating assistant',
               assistant,
-              () async {
-                await AndroidBridge.call('openAccessibility');
-              },
+              openAccessibilitySetup,
               subtitle:
                   'Open Installed apps → Veya floating assistant → Enable.',
             ),
@@ -465,98 +724,191 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 540),
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 24, 8),
-                child: Row(
-                  children: [
-                    IconButton(
-                      onPressed: busy
-                          ? null
-                          : () {
-                              if (step > 0) {
-                                go(step - 1);
-                              } else if (widget.replay) {
-                                Navigator.pop(context);
-                              }
-                            },
-                      icon: const Icon(Icons.arrow_back_rounded),
-                    ),
-                    Expanded(
-                      child: LinearProgressIndicator(
-                        value: (step + 1) / 5,
-                        minHeight: 5,
-                        borderRadius: BorderRadius.circular(6),
-                        backgroundColor: VeyaColors.soft,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.all(24),
-                  children: [
-                    ...content(),
-                    if (error.isNotEmpty && step != 1 && step != 2)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 16),
-                        child: LText(
-                          error,
-                          style: const TextStyle(color: Colors.redAccent),
+  Widget build(BuildContext context) {
+    if (step == 2) return _otpScreen();
+    final showProgress = _flow.indexOf(step) >= _flow.indexOf(0);
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 540),
+            child: Column(
+              children: [
+                if (showProgress)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 24, 8),
+                    child: Row(
+                      children: [
+                        if (step != 0)
+                          IconButton(
+                            onPressed: busy ? null : goBack,
+                            icon: const Icon(Icons.arrow_back_rounded),
+                          )
+                        else
+                          const SizedBox(width: 12),
+                        Expanded(
+                          child: LinearProgressIndicator(
+                            value: (_flow.indexOf(step) - _flow.indexOf(0) + 1) /
+                                (_flow.length - _flow.indexOf(0)),
+                            minHeight: 5,
+                            borderRadius: BorderRadius.circular(6),
+                            backgroundColor: VeyaColors.soft,
+                          ),
                         ),
-                      ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    FilledButton(
-                      onPressed: busy || (step == 1 && !hasValidPhone)
-                          ? null
-                          : () async {
-                              if (step == 1) {
-                                await savePhone();
-                              } else if (step == 2) {
-                                await verifyOtp();
-                              } else if (step == 4) {
-                                await complete();
-                              } else {
-                                await go(step + 1);
-                              }
-                            },
-                      child: busy
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : LText(
-                              [
-                                'Continue',
-                                'Get OTP',
-                                'Verify number',
-                                'Continue',
-                                'Get started',
-                              ][step],
-                            ),
+                      ],
                     ),
-                  ],
+                  ),
+                if (!showProgress)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 24, 8),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: IconButton(
+                        onPressed: busy ? null : goBack,
+                        icon: const Icon(Icons.arrow_back_rounded),
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.all(24),
+                    children: [
+                      ...content(),
+                      if (error.isNotEmpty && step != 1 && step != 2)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 16),
+                          child: LText(
+                            error,
+                            style: const TextStyle(color: Colors.redAccent),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      FilledButton(
+                        onPressed: busy || (step == 1 && !hasValidPhone)
+                            ? null
+                            : () async {
+                                if (step == 1) {
+                                  await savePhone();
+                                } else if (step == 2) {
+                                  await verifyOtp();
+                                } else if (step == 4) {
+                                  await complete();
+                                } else {
+                                  await advance();
+                                }
+                              },
+                        child: busy
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : LText(
+                                [
+                                  'Continue',
+                                  'Get OTP',
+                                  'Verify number',
+                                  'Continue',
+                                  'Get started',
+                                ][step],
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _OtpArtwork extends CustomPainter {
+  const _OtpArtwork();
+  @override
+  void paint(Canvas c, Size s) {
+    c.drawPath(
+      Path()
+        ..moveTo(s.width * .36, 0)
+        ..lineTo(s.width, 0)
+        ..lineTo(s.width, s.height * .7)
+        ..quadraticBezierTo(s.width * .7, s.height * .42, s.width * .36, 0)
+        ..close(),
+      Paint()..color = VeyaColors.mango,
+    );
+    c.drawPath(
+      Path()
+        ..moveTo(s.width * .35, s.height * .2)
+        ..quadraticBezierTo(
+          s.width * .9,
+          s.height * .15,
+          s.width * .96,
+          s.height * .62,
+        )
+        ..quadraticBezierTo(
+          s.width * .86,
+          s.height * .8,
+          s.width * .57,
+          s.height * .55,
+        )
+        ..close(),
+      Paint()..color = VeyaColors.orange,
+    );
+    final p = Paint()..color = VeyaColors.lavender;
+    c.save();
+    c.translate(s.width * .38, s.height * .48);
+    c.rotate(.55);
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(0, 0, 20, 76),
+        const Radius.circular(12),
+      ),
+      p,
+    );
+    c.translate(35, 25);
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(0, 0, 22, 76),
+        const Radius.circular(12),
+      ),
+      p,
+    );
+    c.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _OtpCell extends StatelessWidget {
+  final String value;
+  final bool active;
+  const _OtpCell({required this.value, required this.active});
+  @override
+  Widget build(BuildContext context) => Container(
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: VeyaColors.peach,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: active ? VeyaColors.orange : Colors.transparent,
+        width: active ? 2 : 1,
+      ),
+    ),
+    child: LText(
+      value,
+      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
     ),
   );
 }

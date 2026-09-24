@@ -1,25 +1,28 @@
 import 'package:flutter/material.dart';
 
 class VeyaColors {
-  static const ink = Color(0xFF173F38),
-      teal = Color(0xFF235B4E),
-      muted = Color(0xFF73817B),
-      paper = Color(0xFFF7F8F2),
-      line = Color(0xFFE5E9DF),
-      lime = Color(0xFFD9F291),
-      soft = Color(0xFFECF1E6),
-      peach = Color(0xFFF7E8D9);
+  static const ink = Color(0xFF1B0734),
+      teal = Color(0xFF30105A),
+      muted = Color(0xFF64708B),
+      paper = Color(0xFFFFFAF3),
+      line = Color(0xFFE9E3E8),
+      lime = Color(0xFFFFB32B),
+      soft = Color(0xFFFFE5D0),
+      peach = Color(0xFFFFF0E3),
+      mango = Color(0xFFFF9D1B),
+      orange = Color(0xFFFF642A),
+      lavender = Color(0xFFC98DFF);
 }
 
 ThemeData veyaTheme() {
   final scheme =
       ColorScheme.fromSeed(
-        seedColor: VeyaColors.teal,
+        seedColor: VeyaColors.orange,
         brightness: Brightness.light,
       ).copyWith(
-        primary: VeyaColors.teal,
+        primary: VeyaColors.ink,
         onPrimary: Colors.white,
-        secondary: VeyaColors.lime,
+        secondary: VeyaColors.orange,
         surface: VeyaColors.paper,
         onSurface: VeyaColors.ink,
         outline: VeyaColors.line,
@@ -31,15 +34,15 @@ ThemeData veyaTheme() {
     scaffoldBackgroundColor: VeyaColors.paper,
     textTheme: const TextTheme(
       headlineLarge: TextStyle(
-        fontSize: 36,
+        fontSize: 39,
         fontWeight: FontWeight.w800,
-        letterSpacing: -1.7,
-        height: 1.15,
+        letterSpacing: -2.1,
+        height: 1.03,
       ),
       headlineMedium: TextStyle(
-        fontSize: 28,
+        fontSize: 30,
         fontWeight: FontWeight.w800,
-        letterSpacing: -1.1,
+        letterSpacing: -1.5,
       ),
       titleLarge: TextStyle(
         fontSize: 20,
@@ -60,7 +63,7 @@ ThemeData veyaTheme() {
       style: FilledButton.styleFrom(
         minimumSize: const Size(0, 54),
         padding: const EdgeInsets.symmetric(horizontal: 24),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
@@ -75,11 +78,11 @@ ThemeData veyaTheme() {
       fillColor: Colors.white,
       contentPadding: const EdgeInsets.all(18),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: VeyaColors.line),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: VeyaColors.line),
       ),
     ),
@@ -95,7 +98,7 @@ ThemeData veyaTheme() {
     ),
     navigationBarTheme: const NavigationBarThemeData(
       backgroundColor: Colors.white,
-      indicatorColor: VeyaColors.soft,
+      indicatorColor: VeyaColors.peach,
       labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
     ),
   );

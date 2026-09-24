@@ -3,6 +3,7 @@ package app.veya.veya
 import android.accessibilityservice.AccessibilityService
 import android.animation.ValueAnimator
 import android.content.*
+import android.content.pm.PackageManager
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaRecorder
@@ -49,10 +50,10 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private var pulse: ValueAnimator? = null
  private var hideTarget: TextView? = null
  private var hideTargetParams: WindowManager.LayoutParams? = null
- private val ink = Color.rgb(23, 63, 56)
+ private val ink = Color.rgb(35, 8, 67)
  private val lime = Color.rgb(217, 242, 145)
  private val lavender = Color.rgb(236, 241, 230)
- private val teal = Color.rgb(35, 91, 78)
+ private val teal = Color.rgb(61, 25, 92)
  private var x = 20; private var y = 300
  private var sensor: SensorManager? = null
  private var lastShake = 0L
@@ -94,7 +95,19 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  }
  override fun onAccessibilityEvent(event: AccessibilityEvent?) { refresh() }
  override fun onInterrupt() { cancel(); remove() }
- override fun onDestroy() { sensor?.unregisterListener(this); cancel(); remove(); worker.shutdownNow(); instance = null; super.onDestroy() }
+ override fun onDestroy() {
+  sensor?.unregisterListener(this); cancel(); remove(); worker.shutdownNow(); instance = null
+  if (prefs.getBoolean("returnToVeyaAfterDisable", false)) {
+   prefs.edit().remove("returnToVeyaAfterDisable").apply()
+   main.postDelayed({
+    packageManager.getLaunchIntentForPackage(packageName)?.apply {
+     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+     startActivity(this)
+    }
+   }, 350)
+  }
+  super.onDestroy()
+ }
  override fun onSensorChanged(e: SensorEvent) {
   val force = sqrt(e.values[0]*e.values[0] + e.values[1]*e.values[1] + e.values[2]*e.values[2]) / SensorManager.GRAVITY_EARTH
   if (hidden && force > 2.35f && SystemClock.uptimeMillis() - lastShake > 900) { lastShake=SystemClock.uptimeMillis(); restore() }
@@ -115,7 +128,14 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   if (panel == null && focus?.isEditable == true) { targetPackage = pkg; bubble() }
  }
  private fun background() = GradientDrawable().apply { setColor(ink); cornerRadius = dp(24).toFloat() }
- private fun responseBackground() = GradientDrawable().apply { setColor(Color.argb(234, 247, 232, 217)); cornerRadius = dp(26).toFloat() }
+ private fun recorderBackground() = GradientDrawable().apply {
+  setColor(Color.rgb(255, 249, 240)); cornerRadius = dp(30).toFloat()
+  setStroke(dp(1), Color.rgb(232, 218, 202))
+ }
+ private fun responseBackground() = GradientDrawable().apply {
+  setColor(Color.rgb(255, 249, 240)); cornerRadius = dp(28).toFloat()
+  setStroke(dp(1), Color.rgb(232, 218, 202))
+ }
  private fun text(value: String, size: Float = 16f) = TextView(this).apply {
   text = value; textSize = size; setTextColor(lime); gravity = Gravity.CENTER; setPadding(dp(12), dp(10), dp(12), dp(10))
  }
@@ -123,14 +143,14 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private fun circle(value:String, fillColor:Int, textColor:Int, action:()->Unit) = TextView(this).apply {
   text=value; textSize=26f; setTextColor(textColor); gravity=Gravity.CENTER
   background=GradientDrawable().apply { setColor(fillColor); shape=GradientDrawable.OVAL }
-  elevation=dp(6).toFloat(); setOnClickListener { haptic(); action() }
+  setOnClickListener { haptic(); action() }
  }
  private fun doneCircle(fillColor: Int, action: () -> Unit) = object : View(this) {
   private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fillColor }
   private val check = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-   color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat(); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+   color = ink; style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat(); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
   }
-  init { elevation = dp(6).toFloat(); setOnClickListener { haptic(); action() } }
+  init { setOnClickListener { haptic(); action() } }
   override fun onDraw(canvas: Canvas) {
    val r = min(width, height) / 2f
    canvas.drawCircle(width / 2f, height / 2f, r, fill)
@@ -209,9 +229,9 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   // never clipped by the overlay window.
   val frame = LinearLayout(this).apply {
    orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER; clipChildren=false; clipToPadding=false
-   addView(orb, LinearLayout.LayoutParams((dp(54)*scale).roundToInt(), (dp(52)*scale).roundToInt()))
+   addView(orb, LinearLayout.LayoutParams((dp(54)*scale).roundToInt(), (dp(54)*scale).roundToInt()))
   }
-  val lp = WindowManager.LayoutParams((dp(64)*scale).roundToInt(), (dp(62)*scale).roundToInt(), WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+  val lp = WindowManager.LayoutParams((dp(64)*scale).roundToInt(), (dp(64)*scale).roundToInt(), WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT).apply {
     gravity=Gravity.TOP or Gravity.LEFT; x=this@FloatingAssistant.x; y=this@FloatingAssistant.y
   }
@@ -221,24 +241,25 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   draggable(orb) { startRecording() }
  }
  private inner class Orb(private val active:Boolean): View(this@FloatingAssistant) {
-  private val pebblePeach=Color.rgb(247, 232, 217)
-  private val pebbleMuted=Color.rgb(115, 129, 123)
-  private val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=pebblePeach }
-  private val bar=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=teal; strokeWidth=dp(3).toFloat(); strokeCap=Paint.Cap.ROUND }
+  private val mango=Color.rgb(255, 157, 27)
+  private val deepInk=Color.rgb(27, 7, 52)
+  private val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=mango }
+  private val bar=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=deepInk; strokeWidth=dp(5).toFloat(); strokeCap=Paint.Cap.ROUND }
   override fun onDraw(c:Canvas) {
-   // A warm, quiet version of Pebble: a clean peach surface and a small teal
-   // waveform that stays visible without competing with the host app.
-   val outer=RectF(0f,0f,width.toFloat(),height.toFloat())
-   val u=min(width.toFloat()/dp(54),height.toFloat()/dp(52))
+   // The in-app assistant is the circular companion to the launcher tile:
+   // same Mango Ink palette and the same five-bar V-wave geometry.
+   val u=min(width.toFloat()/dp(54),height.toFloat()/dp(54))
    fun unit(value:Int)=dp(value)*u
-   c.drawRoundRect(outer,unit(19),unit(19),fill)
+   c.drawCircle(width / 2f, height / 2f, min(width, height) / 2f, fill)
    val time=SystemClock.uptimeMillis()/130.0
-   val idleHeights=intArrayOf(5, 8, 13, 8, 5)
-   bar.strokeWidth=unit(3)
+   val tops=floatArrayOf(.31f, .44f, .57f, .44f, .31f)
+   val baseHeight=height*.31f
+   bar.strokeWidth=unit(5)
    for(i in 0..4) {
-    val halfHeight=if(active) (unit(5).toDouble() + abs(sin(time+i*.8))*unit(9).toDouble()).toFloat() else unit(idleHeights[i])
-    val xx=width/2f+(i-2)*unit(7)
-    c.drawLine(xx,height/2f-halfHeight,xx,height/2f+halfHeight,bar)
+    val pulse=if(active) (abs(sin(time+i*.8))*unit(5)).toFloat() else 0f
+    val xx=width*(.21f+i*.14f)
+    val top=height*tops[i]-pulse*.45f
+    c.drawLine(xx,top,xx,top+baseHeight+pulse,bar)
    }
    if(active) postInvalidateDelayed(45)
   }
@@ -250,6 +271,15 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  }
  private fun startRecording() {
   if(state!="idle") return
+  if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+   // Runtime permissions need an Activity. This transparent activity shows
+   // only Android's microphone prompt over the current app, then closes.
+   Intent(this, MicPermissionActivity::class.java).apply {
+    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+    startActivity(this)
+   }
+   return
+  }
   try {
    if(prefs.getString("endpoint", "").isNullOrBlank()) error("Set the translation service in Veya Settings.")
    ++requestId
@@ -269,36 +299,33 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  }
  private fun recorderControls() {
   remove()
-  // Keep the controls compact, but give each action enough clear space to avoid
-  // accidental taps while the phone is being held one-handed.
- val row=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL; setPadding(dp(7),dp(7),dp(7),dp(7)) }
-  val lp=WindowManager.LayoutParams(dp(202),dp(60),WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+  val row=LinearLayout(this).apply {
+   gravity=Gravity.CENTER_VERTICAL; setPadding(dp(8),dp(8),dp(8),dp(8)); background=recorderBackground(); elevation=dp(10).toFloat()
+  }
+  val lp=WindowManager.LayoutParams(dp(236),dp(68),WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT).apply { gravity=Gravity.TOP or Gravity.LEFT; x=this@FloatingAssistant.x; y=this@FloatingAssistant.y }
-  val controlPeach=Color.argb(222, 247, 232, 217)
-  val controlTeal=Color.argb(222, 35, 91, 78)
-  val close=circle("×",controlPeach,teal) { cancel(); bubble() }
-  row.addView(close,LinearLayout.LayoutParams(dp(46),dp(46)))
-  val capsule=Wave().apply { background=GradientDrawable().apply { setColor(controlPeach); cornerRadius=dp(23).toFloat() }; setPadding(dp(8),0,dp(8),0) }
-  row.addView(capsule,LinearLayout.LayoutParams(0,dp(46),1f).apply { setMargins(dp(9),0,dp(9),0) })
-  row.addView(doneCircle(controlTeal) { finishRecording() },LinearLayout.LayoutParams(dp(46),dp(46)))
+  val close=circle("×",Color.rgb(247,232,217),ink) { cancel(); bubble() }
+  row.addView(close,LinearLayout.LayoutParams(dp(48),dp(48)))
+  val capsule=Wave().apply { background=GradientDrawable().apply { setColor(ink); cornerRadius=dp(24).toFloat() }; setPadding(dp(8),0,dp(8),0) }
+  row.addView(capsule,LinearLayout.LayoutParams(0,dp(48),1f).apply { setMargins(dp(10),0,dp(10),0) })
+  row.addView(doneCircle(Color.rgb(255,157,27)) { finishRecording() },LinearLayout.LayoutParams(dp(48),dp(48)))
   panel=row; params=lp; wm.addView(row,lp); draggable(capsule)
  }
  private fun generatingControls() {
   remove()
-  val row=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL; setPadding(dp(7),dp(7),dp(7),dp(7)) }
-  val lp=WindowManager.LayoutParams(dp(202),dp(60),WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+  val row=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL; setPadding(dp(8),dp(8),dp(8),dp(8)); background=recorderBackground(); elevation=dp(10).toFloat() }
+  val lp=WindowManager.LayoutParams(dp(236),dp(68),WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT).apply { gravity=Gravity.TOP or Gravity.LEFT; x=this@FloatingAssistant.x; y=this@FloatingAssistant.y }
-  val controlPeach=Color.argb(222, 247, 232, 217)
-  val close=circle("×",controlPeach,teal) { cancel(); bubble() }
-  row.addView(close,LinearLayout.LayoutParams(dp(46),dp(46)))
-  val capsule=Wave().apply { background=GradientDrawable().apply { setColor(controlPeach); cornerRadius=dp(23).toFloat() } }
-  row.addView(capsule,LinearLayout.LayoutParams(0,dp(46),1f).apply { setMargins(dp(9),0,dp(9),0) })
-  row.addView(Spinner(controlPeach),LinearLayout.LayoutParams(dp(46),dp(46)))
+  val close=circle("×",Color.rgb(247,232,217),ink) { cancel(); bubble() }
+  row.addView(close,LinearLayout.LayoutParams(dp(48),dp(48)))
+  val capsule=Wave().apply { background=GradientDrawable().apply { setColor(ink); cornerRadius=dp(24).toFloat() } }
+  row.addView(capsule,LinearLayout.LayoutParams(0,dp(48),1f).apply { setMargins(dp(10),0,dp(10),0) })
+  row.addView(Spinner(Color.rgb(255,157,27)),LinearLayout.LayoutParams(dp(48),dp(48)))
   panel=row; params=lp; wm.addView(row,lp)
  }
  private inner class Spinner(private val backgroundColor: Int) : View(this@FloatingAssistant) {
   private val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=backgroundColor }
-  private val arc=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=teal; style=Paint.Style.STROKE; strokeWidth=dp(3).toFloat(); strokeCap=Paint.Cap.ROUND }
+  private val arc=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=ink; style=Paint.Style.STROKE; strokeWidth=dp(3).toFloat(); strokeCap=Paint.Cap.ROUND }
   override fun onDraw(canvas: Canvas) {
    val center=width/2f; val radius=min(width,height)/2f
    canvas.drawCircle(center,height/2f,radius,fill)
@@ -316,9 +343,9 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   private val line=Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.STROKE; strokeWidth=dp(1).toFloat(); strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
   private val glyph=Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign=Paint.Align.CENTER; typeface=Typeface.DEFAULT_BOLD }
   override fun onDraw(canvas: Canvas) {
-   fill.color=if(active) teal else Color.WHITE
-   line.color=if(active) Color.WHITE else teal
-   glyph.color=if(active) Color.WHITE else teal
+   fill.color=if(active) Color.rgb(255,157,27) else Color.rgb(255,249,240)
+   line.color=ink
+   glyph.color=ink
    val cx=width/2f; val cy=height/2f; canvas.drawCircle(cx,cy,min(width,height)/2f,fill)
    when(mode) {
     "casual" -> { canvas.drawCircle(cx,cy,dp(12).toFloat(),line); canvas.drawCircle(cx-dp(4),cy-dp(2),dp(1).toFloat(),Paint(line).apply { style=Paint.Style.FILL }); canvas.drawCircle(cx+dp(4),cy-dp(2),dp(1).toFloat(),Paint(line).apply { style=Paint.Style.FILL }); canvas.drawArc(RectF(cx-dp(6),cy-dp(1),cx+dp(6),cy+dp(8)),0f,180f,false,line) }
@@ -329,7 +356,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  }
  private fun arrowButton(direction: Int, action: () -> Unit) = object : View(this) {
   private val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.argb(155,255,255,255) }
-  private val arrow=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=teal; style=Paint.Style.STROKE; strokeWidth=dp(2).toFloat(); strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
+  private val arrow=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=ink; style=Paint.Style.STROKE; strokeWidth=dp(2).toFloat(); strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
   init { setOnClickListener { haptic(); action() } }
   override fun onDraw(canvas: Canvas) {
    val cx=width/2f; val cy=height/2f; canvas.drawCircle(cx,cy,min(width,height)/2f,fill)
@@ -338,7 +365,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   }
  }
  private inner class Wave: View(this@FloatingAssistant) {
-  private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.argb(220, 35, 91, 78); strokeWidth=dp(3).toFloat(); strokeCap=Paint.Cap.ROUND }
+  private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(255, 190, 78); strokeWidth=dp(3).toFloat(); strokeCap=Paint.Cap.ROUND }
   override fun onDraw(c: Canvas) {
    super.onDraw(c)
    // MediaRecorder reports a raw 16-bit peak. Ignore low room noise so the
@@ -428,13 +455,11 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   val original=data.optString("original_text")
   val sourceCode=prefs.getString("language", "en-IN") ?: "en-IN"
   val language=languageLabels(sourceCode)
-  show(350) { box ->
-   // Keep the result sheet compact enough for its complete message to be read
-   // at once in ordinary chat messages, while retaining a scroll fallback for
-   // genuinely long dictation.
-   box.background=responseBackground(); box.setPadding(dp(10),dp(9),dp(10),dp(10))
-   val content=text(selected,14f).apply {
-    gravity=Gravity.START; setTextColor(ink); setPadding(dp(8),dp(5),dp(8),dp(5))
+  show(344) { box ->
+   box.background=responseBackground(); box.elevation=dp(12).toFloat(); box.setPadding(dp(12),dp(12),dp(12),dp(12))
+   val content=text(selected,16f).apply {
+    gravity=Gravity.START; setTextColor(ink); setTypeface(null,Typeface.BOLD)
+    setLineSpacing(dp(4).toFloat(), 1f); setPadding(dp(7),dp(10),dp(7),dp(8))
    }
    val pages=mutableListOf<Triple<String,String,String>>().apply {
     add(Triple("casual","Casual",styles.optString("casual",data.optString("english_text"))))
@@ -446,7 +471,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    val selector=LinearLayout(this).apply {
     gravity=Gravity.CENTER_VERTICAL
     setPadding(dp(5),dp(5),dp(5),dp(5))
-    background=GradientDrawable().apply { setColor(Color.argb(218,255,255,255)); cornerRadius=dp(16).toFloat() }
+    background=GradientDrawable().apply { setColor(Color.rgb(247,232,217)); cornerRadius=dp(18).toFloat() }
    }
    val tabBodies=mutableListOf<LinearLayout>()
    val tabIcons=mutableListOf<ModeBadge>()
@@ -461,20 +486,20 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
       if(page!=index) { haptic(); page=index; refreshPage() }
      }
     }
-    val icon=ModeBadge().apply { mode=if(item.first=="original") language.second else item.first }
-    val label=TextView(this).apply { text=item.second; textSize=7f; gravity=Gravity.CENTER; isSingleLine=true; setTypeface(null,Typeface.BOLD) }
-    tab.addView(icon,LinearLayout.LayoutParams(dp(27),dp(27)))
-    tab.addView(label,LinearLayout.LayoutParams(-1,dp(15)))
-    selector.addView(tab,LinearLayout.LayoutParams(0,dp(43),1f))
+    val icon=ModeBadge().apply { mode=if(item.first=="original") "Aa" else item.first }
+    val label=TextView(this).apply { text=item.second; textSize=8f; gravity=Gravity.CENTER; isSingleLine=true; setTypeface(null,Typeface.BOLD) }
+    tab.addView(icon,LinearLayout.LayoutParams(dp(30),dp(30)))
+    tab.addView(label,LinearLayout.LayoutParams(-1,dp(16)))
+    selector.addView(tab,LinearLayout.LayoutParams(0,dp(48),1f))
     tabBodies.add(tab); tabIcons.add(icon); tabLabels.add(label)
    }
-   box.addView(selector,LinearLayout.LayoutParams(-1,dp(53)))
+   box.addView(selector,LinearLayout.LayoutParams(-1,dp(58)))
    refreshPage = {
     val next=pages[page]
     selectedKey=next.first; selected=next.third; content.text=selected
     tabIcons.forEachIndexed { index, icon ->
      icon.active=index==page
-     tabLabels[index].setTextColor(if(index==page) teal else if(pages[index].third.isBlank()) Color.rgb(150,165,159) else Color.rgb(86,112,104))
+     tabLabels[index].setTextColor(if(index==page) ink else if(pages[index].third.isBlank()) Color.rgb(150,165,159) else Color.rgb(97,93,108))
      tabBodies[index].animate().cancel()
      tabBodies[index].scaleX=if(index==page) 1f else .92f
      tabBodies[index].scaleY=if(index==page) 1f else .92f
@@ -485,15 +510,19 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
     content.animate().alpha(1f).translationY(0f).setDuration(180).start()
    }
    refreshPage()
-   box.addView(ScrollView(this).apply { addView(content) },LinearLayout.LayoutParams(-1,dp(155)))
+   box.addView(ScrollView(this).apply { addView(content) },LinearLayout.LayoutParams(-1,dp(142)))
    val actions=LinearLayout(this); box.addView(actions)
    fun action(label: String, primary: Boolean, onTap: () -> Unit) = TextView(this).apply {
-    text=label; textSize=12f; gravity=Gravity.CENTER; setTextColor(if(primary) Color.WHITE else teal)
-    background=GradientDrawable().apply { setColor(if(primary) Color.argb(222,35,91,78) else Color.argb(150,255,255,255)); cornerRadius=dp(16).toFloat() }
+    text=label; textSize=13f; gravity=Gravity.CENTER; setTypeface(null,Typeface.BOLD)
+    setTextColor(if(primary) Color.WHITE else ink)
+    background=GradientDrawable().apply {
+     setColor(if(primary) ink else Color.rgb(247,232,217)); cornerRadius=dp(18).toFloat()
+     if(!primary) setStroke(dp(1), Color.rgb(232,218,202))
+    }
     setOnClickListener { haptic(); onTap() }
    }
-   actions.addView(action("Close",false) { bubble() },LinearLayout.LayoutParams(0,dp(38),1f).apply { setMargins(0,0,dp(6),0) })
-   actions.addView(action("Insert",true) { insert(selected) },LinearLayout.LayoutParams(0,dp(38),1f))
+   actions.addView(action("Close",false) { bubble() },LinearLayout.LayoutParams(0,dp(44),1f).apply { setMargins(0,0,dp(8),0) })
+   actions.addView(action("Insert",true) { insert(selected) },LinearLayout.LayoutParams(0,dp(44),1f))
    // Casual is shown as soon as Sarvam returns it. The slower two style
    // rewrites arrive independently and update their tabs without blocking
    // the result sheet or the Insert action.
