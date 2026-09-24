@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../core/store.dart';
 import '../core/platform.dart';
 import '../core/theme.dart';
-import '../core/models.dart';
 import '../widgets/shared.dart';
 import 'settings.dart';
 
@@ -14,11 +13,52 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int page = 0;
+  bool assistantEnabled = false;
+  List<Map<String, dynamic>> availableApps = const [];
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshAssistantState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _warmApps());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshAssistantState();
+  }
+
+  Future<void> _refreshAssistantState() async {
+    final enabled = await AndroidBridge.call<bool>('isEnabled') ?? false;
+    if (mounted) setState(() => assistantEnabled = enabled);
+  }
+
+  Future<void> _warmApps() async {
+    final raw = await AndroidBridge.call<List<dynamic>>('installedApps') ?? [];
+    if (!mounted) return;
+    setState(() {
+      availableApps = raw.map((item) => Map<String, dynamic>.from(item)).toList();
+    });
+  }
+
+  void _openApps() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AppsScreen(
+          store: widget.store,
+          initialApps: availableApps,
+        ),
+      ),
+    );
   }
 
   @override
@@ -159,15 +199,15 @@ class _HomeShellState extends State<HomeShell> {
           ],
         ),
       ),
-      const SizedBox(height: 26),
-      _AssistantStatus(
-        count: widget.store.allowedApps.length,
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AppsScreen(store: widget.store)),
+      if (assistantEnabled) ...[
+        const SizedBox(height: 26),
+        _AssistantStatus(
+          count: widget.store.allowedApps.length,
+          onTap: _openApps,
         ),
-      ),
-      const SizedBox(height: 14),
+        const SizedBox(height: 14),
+      ] else
+        const SizedBox(height: 26),
       const SurfaceCard(
         padding: EdgeInsets.fromLTRB(20, 15, 20, 12),
         child: Column(

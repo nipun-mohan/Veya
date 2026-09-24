@@ -60,10 +60,15 @@ class MainActivity : FlutterActivity() {
     "stopOtpListener" -> { stopOtpListener(); result.success(null) }
     "showBubble" -> { FloatingAssistant.instance?.restore(); result.success(null) }
     "installedApps" -> {
-     val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-     result.success(packageManager.queryIntentActivities(intent, 0).distinctBy { it.activityInfo.packageName }
-      .filter { it.activityInfo.packageName != packageName }
-      .map { mapOf("package" to it.activityInfo.packageName, "name" to it.loadLabel(packageManager).toString()) }.sortedBy { it["name"] })
+     Thread {
+      val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+      val apps = packageManager.queryIntentActivities(launcherIntent, 0)
+       .distinctBy { it.activityInfo.packageName }
+       .filter { it.activityInfo.packageName != packageName }
+       .map { mapOf("package" to it.activityInfo.packageName, "name" to it.loadLabel(packageManager).toString()) }
+       .sortedBy { it["name"] }
+      runOnUiThread { result.success(apps) }
+     }.start()
     }
     else -> result.notImplemented()
    }

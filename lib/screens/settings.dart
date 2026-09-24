@@ -393,7 +393,8 @@ class _SliderRow extends StatelessWidget {
 
 class AppsScreen extends StatefulWidget {
   final VeyaStore store;
-  const AppsScreen({super.key, required this.store});
+  final List<Map<String, dynamic>> initialApps;
+  const AppsScreen({super.key, required this.store, this.initialApps = const []});
   @override
   State<AppsScreen> createState() => _AppsScreenState();
 }
@@ -405,7 +406,12 @@ class _AppsScreenState extends State<AppsScreen> {
   @override
   void initState() {
     super.initState();
-    load();
+    if (widget.initialApps.isNotEmpty) {
+      apps = widget.initialApps;
+      loading = false;
+    } else {
+      load();
+    }
   }
 
   Future<void> load() async {
