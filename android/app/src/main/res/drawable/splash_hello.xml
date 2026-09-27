@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A deliberately non-launcher mark for Android's mandatory startup surface. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#26083D"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M23,58 L23,39 M23,50 C27,42 37,42 37,51 L37,66 M37,51 C41,43 51,43 51,52 L51,66 M59,52 C59,44 70,44 70,53 L70,66 M78,47 L78,66 M78,47 C83,42 90,46 90,53 C90,61 84,65 78,66" />
+    <path
+        android:strokeColor="#FF8A20"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M25,76 C41,82 69,82 85,74" />
+</vector>

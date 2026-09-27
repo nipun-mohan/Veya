@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ shows this before Flutter's Lottie splash is ready. -->
+    <style name="LaunchTheme" parent="Theme.SplashScreen">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <!-- Android requires a native launch surface.  This is a still from
+             the handwritten text treatment, never the launcher icon. -->
+        <item name="windowSplashScreenBackground">#FFFAF3</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_hello</item>
+        <item name="windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+        <!-- Avoid retaining a launcher preview behind the launch surface. -->
+        <item name="android:windowDisablePreview">true</item>
+        <item name="postSplashScreenTheme">@style/NormalTheme</item>
+    </style>
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+</resources>

@@ -55,9 +55,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     if (!mounted) return;
     final accepted = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(
-        builder: (_) => const AccessibilityConsentScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const AccessibilityConsentScreen()),
     );
     if (accepted == true) {
       await widget.store.acceptAccessibilityConsent();
@@ -81,7 +79,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           keyboardType: TextInputType.url,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: 'https://veya-gateway-233466884801.asia-south1.run.app',
+            hintText: 'https://api.heyveya.app',
             labelText: 'Gateway URL',
           ),
         ),
@@ -394,7 +392,11 @@ class _SliderRow extends StatelessWidget {
 class AppsScreen extends StatefulWidget {
   final VeyaStore store;
   final List<Map<String, dynamic>> initialApps;
-  const AppsScreen({super.key, required this.store, this.initialApps = const []});
+  const AppsScreen({
+    super.key,
+    required this.store,
+    this.initialApps = const [],
+  });
   @override
   State<AppsScreen> createState() => _AppsScreenState();
 }
@@ -453,7 +455,7 @@ class _AppsScreenState extends State<AppsScreen> {
         ),
         const SizedBox(height: 16),
         if (loading)
-          const Center(child: CircularProgressIndicator())
+          const Center(child: VeyaLoader())
         else if (apps.isEmpty)
           const SurfaceCard(
             child: LText(

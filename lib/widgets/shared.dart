@@ -33,6 +33,21 @@ class VeyaOrb extends StatelessWidget {
   );
 }
 
+/// The one loading treatment used throughout Veya.
+class VeyaLoader extends StatelessWidget {
+  const VeyaLoader({super.key});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 20,
+    height: 20,
+    child: const CircularProgressIndicator(
+      strokeWidth: 2.8,
+      color: VeyaColors.ink,
+    ),
+  );
+}
+
 class _MarkPainter extends CustomPainter {
   final Color color;
   _MarkPainter(this.color);

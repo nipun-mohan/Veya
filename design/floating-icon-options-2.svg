@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="870" viewBox="0 0 1440 870">
+  <rect width="1440" height="870" fill="#f7f8f2"/>
+  <text x="80" y="82" fill="#173f38" font-family="Arial, sans-serif" font-size="42" font-weight="700">More Veya floating assistant directions</text>
+  <text x="80" y="125" fill="#527069" font-family="Arial, sans-serif" font-size="24">All icons are designed for a 48–52dp overlay and animate into the recorder state.</text>
+  <g transform="translate(115,190)">
+    <circle cx="115" cy="105" r="67" fill="#173f38"/>
+    <circle cx="115" cy="105" r="56" fill="none" stroke="#d9f291" stroke-width="2" stroke-dasharray="5 7"/>
+    <path d="M80 105h12l8-23 15 46 13-34 9 11h13" fill="none" stroke="#d9f291" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="115" y="217" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="26" font-weight="700">Signal</text>
+    <text x="115" y="250" text-anchor="middle" fill="#527069" font-family="Arial" font-size="19">Heartbeat waveform</text>
+  </g>
+  <g transform="translate(405,190)">
+    <circle cx="115" cy="105" r="67" fill="#235b4e"/>
+    <path d="M79 111c2 28 70 28 72 0" fill="none" stroke="#d9f291" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="94" cy="90" r="6" fill="#d9f291"/><circle cx="136" cy="90" r="6" fill="#d9f291"/>
+    <path d="M92 62h46" stroke="#f7f8f2" stroke-width="3" stroke-linecap="round" opacity=".75"/>
+    <text x="115" y="217" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="26" font-weight="700">Voice</text>
+    <text x="115" y="250" text-anchor="middle" fill="#527069" font-family="Arial" font-size="19">Warm conversational mark</text>
+  </g>
+  <g transform="translate(695,190)">
+    <path d="M115 36c48 0 79 32 79 76 0 45-31 77-79 77S36 157 36 112c0-44 31-76 79-76Z" fill="#173f38"/>
+    <path d="M97 174l-18 25 37-14" fill="#173f38"/>
+    <g stroke="#d9f291" stroke-width="7" stroke-linecap="round"><path d="M84 111v-13"/><path d="M99 111V82"/><path d="M115 111V70"/><path d="M131 111V82"/><path d="M146 111v-13"/></g>
+    <text x="115" y="238" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="26" font-weight="700">Speak</text>
+    <text x="115" y="271" text-anchor="middle" fill="#527069" font-family="Arial" font-size="19">Voice bubble, direct intent</text>
+  </g>
+  <g transform="translate(985,190)">
+    <circle cx="115" cy="105" r="67" fill="#d9f291"/>
+    <circle cx="115" cy="105" r="52" fill="#173f38"/>
+    <path d="M115 71v41" stroke="#f7f8f2" stroke-width="8" stroke-linecap="round"/>
+    <path d="M94 105c0 30 42 30 42 0" fill="none" stroke="#f7f8f2" stroke-width="7" stroke-linecap="round"/>
+    <path d="M115 135v15M99 150h32" stroke="#d9f291" stroke-width="6" stroke-linecap="round"/>
+    <text x="115" y="217" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="26" font-weight="700">Mic</text>
+    <text x="115" y="250" text-anchor="middle" fill="#527069" font-family="Arial" font-size="19">Recognizable recording action</text>
+  </g>
+  <g transform="translate(260,500)">
+    <circle cx="115" cy="105" r="67" fill="#173f38"/>
+    <circle cx="115" cy="105" r="57" fill="none" stroke="#235b4e" stroke-width="10"/>
+    <circle cx="115" cy="105" r="57" fill="none" stroke="#d9f291" stroke-width="5" stroke-linecap="round" stroke-dasharray="48 310" transform="rotate(-90 115 105)"/>
+    <g stroke="#f7f8f2" stroke-width="7" stroke-linecap="round"><path d="M91 105v-12"/><path d="M103 105V83"/><path d="M115 105V75"/><path d="M127 105V83"/><path d="M139 105v-12"/></g>
+    <text x="115" y="217" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="26" font-weight="700">Orbit</text>
+    <text x="115" y="250" text-anchor="middle" fill="#527069" font-family="Arial" font-size="19">Progress orbit for recording</text>
+  </g>
+  <g transform="translate(790,500)">
+    <rect x="46" y="42" width="138" height="126" rx="42" fill="#235b4e"/>
+    <circle cx="115" cy="105" r="47" fill="#173f38"/>
+    <path d="M79 105h13l8-19 14 38 14-31 9 12h13" fill="none" stroke="#d9f291" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="115" y="217" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="26" font-weight="700">Tile</text>
+    <text x="115" y="250" text-anchor="middle" fill="#527069" font-family="Arial" font-size="19">Confident soft-square button</text>
+  </g>
+</svg>

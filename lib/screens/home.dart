@@ -45,7 +45,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final raw = await AndroidBridge.call<List<dynamic>>('installedApps') ?? [];
     if (!mounted) return;
     setState(() {
-      availableApps = raw.map((item) => Map<String, dynamic>.from(item)).toList();
+      availableApps = raw
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
     });
   }
 
@@ -53,10 +55,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AppsScreen(
-          store: widget.store,
-          initialApps: availableApps,
-        ),
+        builder: (_) =>
+            AppsScreen(store: widget.store, initialApps: availableApps),
       ),
     );
   }
@@ -149,7 +149,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       ),
       const SizedBox(height: 28),
       SizedBox(
-        height: 292,
+        height: 276,
         child: Stack(
           children: [
             const Positioned(
@@ -165,7 +165,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                 ),
               ),
             ),
-            const Positioned(right: -10, top: 0, child: _MangoSpeech()),
+            const Positioned(right: 2, top: 20, child: _SpeechRibbons()),
             const Positioned(
               left: 0,
               bottom: 2,
@@ -176,23 +176,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                   height: 1.16,
                   color: VeyaColors.muted,
                   fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            Positioned(
-              right: 0,
-              bottom: 3,
-              child: Transform.rotate(
-                angle: -.17,
-                child: const LText(
-                  'Your\nvoice\ntravels\nfurther',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: .96,
-                    fontStyle: FontStyle.italic,
-                    fontWeight: FontWeight.w800,
-                  ),
                 ),
               ),
             ),
@@ -242,112 +225,51 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   );
 }
 
-class _MangoSpeech extends StatelessWidget {
-  const _MangoSpeech();
+class _SpeechRibbons extends StatefulWidget {
+  const _SpeechRibbons();
   @override
-  Widget build(BuildContext context) =>
-      CustomPaint(size: const Size(184, 244), painter: _MangoPainter());
+  State<_SpeechRibbons> createState() => _SpeechRibbonsState();
 }
 
-class _MangoPainter extends CustomPainter {
+class _SpeechRibbonsState extends State<_SpeechRibbons>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 3600),
+  )..repeat();
+
   @override
-  void paint(Canvas c, Size s) {
-    c.drawPath(
-      Path()
-        ..moveTo(s.width * .39, s.height * .02)
-        ..quadraticBezierTo(
-          s.width * .83,
-          -s.height * .04,
-          s.width * .78,
-          s.height * .22,
-        )
-        ..lineTo(s.width * .54, s.height * .75)
-        ..quadraticBezierTo(
-          s.width * .47,
-          s.height * .98,
-          s.width * .30,
-          s.height * .90,
-        )
-        ..lineTo(s.width * .30, s.height * .28)
-        ..quadraticBezierTo(
-          s.width * .30,
-          s.height * .08,
-          s.width * .39,
-          s.height * .02,
-        )
-        ..close(),
-      Paint()..color = VeyaColors.mango,
-    );
-    c.drawPath(
-      Path()
-        ..moveTo(s.width * .31, s.height * .54)
-        ..quadraticBezierTo(
-          s.width * .68,
-          s.height * .30,
-          s.width * .88,
-          s.height * .46,
-        )
-        ..quadraticBezierTo(
-          s.width * .98,
-          s.height * .61,
-          s.width * .72,
-          s.height * .70,
-        )
-        ..quadraticBezierTo(
-          s.width * .52,
-          s.height * .78,
-          s.width * .25,
-          s.height * .98,
-        )
-        ..lineTo(s.width * .25, s.height * .67)
-        ..quadraticBezierTo(
-          s.width * .25,
-          s.height * .58,
-          s.width * .31,
-          s.height * .54,
-        )
-        ..close(),
-      Paint()..color = VeyaColors.orange,
-    );
-    c.save();
-    c.translate(s.width * .86, s.height * .19);
-    c.rotate(-.72);
-    c.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(0, 0, s.width * .18, s.height * .055),
-        Radius.circular(s.width * .05),
-      ),
-      Paint()..color = VeyaColors.lavender,
-    );
-    c.translate(-s.width * .02, s.height * .10);
-    c.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(0, 0, s.width * .18, s.height * .055),
-        Radius.circular(s.width * .05),
-      ),
-      Paint()..color = VeyaColors.lavender,
-    );
-    c.restore();
-    c.save();
-    c.translate(s.width * .64, s.height * .93);
-    c.rotate(-.72);
-    c.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          -s.width * .16,
-          -s.height * .045,
-          s.width * .34,
-          s.height * .09,
-        ),
-        Radius.circular(s.width * .08),
-      ),
-      Paint()..color = VeyaColors.lavender,
-    );
-    c.restore();
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: AnimatedBuilder(
+      animation: _controller,
+      builder: (_, child) {
+        final phase = Curves.easeInOut.transform(
+          _controller.value < .5
+              ? _controller.value * 2
+              : (1 - _controller.value) * 2,
+        );
+        return Transform.translate(
+          offset: Offset(0, -3 * phase),
+          child: Transform.scale(scale: 1 + .018 * phase, child: child),
+        );
+      },
+      child: const SizedBox(
+        width: 142,
+        height: 174,
+        child: Image(
+          image: AssetImage('assets/branding/hero-speech-ribbons.png'),
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.high,
+        ),
+      ),
+    ),
+  );
 }
 
 class _AssistantStatus extends StatelessWidget {

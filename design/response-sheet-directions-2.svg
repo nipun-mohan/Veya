@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1120" viewBox="0 0 1500 1120">
+ <rect width="1500" height="1120" fill="#f7f8f2"/>
+ <text x="80" y="82" fill="#173f38" font-family="Arial, sans-serif" font-size="42" font-weight="700">More Veya response sheet directions</text>
+ <text x="80" y="124" fill="#73817b" font-family="Arial, sans-serif" font-size="23">These alternatives avoid a conventional five-tab row completely.</text>
+ <!-- D -->
+ <g transform="translate(100,190)">
+  <rect width="380" height="720" rx="44" fill="#f7e8d9"/>
+  <text x="34" y="61" fill="#235b4e" font-family="Arial" font-size="26" font-weight="700">veya</text>
+  <circle cx="336" cy="49" r="24" fill="#fff" opacity=".72"/><path d="M328 41l16 16m0-16l-16 16" stroke="#235b4e" stroke-width="4" stroke-linecap="round"/>
+  <rect x="28" y="108" width="324" height="50" rx="25" fill="#235b4e"/><text x="50" y="140" fill="#fff" font-family="Arial" font-size="16" font-weight="700">☺  Casual</text><text x="326" y="140" text-anchor="end" fill="#d9f291" font-family="Arial" font-size="18">⌄</text>
+  <rect x="28" y="169" width="324" height="46" rx="23" fill="#fff" opacity=".6"/><text x="50" y="199" fill="#235b4e" font-family="Arial" font-size="15">♧  Formal</text>
+  <rect x="28" y="226" width="324" height="46" rx="23" fill="#fff" opacity=".6"/><text x="50" y="256" fill="#235b4e" font-family="Arial" font-size="15">▣  Professional</text>
+  <rect x="28" y="283" width="157" height="46" rx="23" fill="#fff" opacity=".6"/><text x="49" y="313" fill="#235b4e" font-family="Arial" font-size="14">Aa  Malayalam</text>
+  <rect x="195" y="283" width="157" height="46" rx="23" fill="#fff" opacity=".6"/><text x="215" y="313" fill="#235b4e" font-family="Arial" font-size="15">അ  മലയാളം</text>
+  <text x="34" y="398" fill="#173f38" font-family="Arial" font-size="29" font-weight="700">What’s up?</text>
+  <rect x="28" y="593" width="156" height="54" rx="27" fill="#fff" opacity=".75"/><text x="106" y="627" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="18" font-weight="700">▢  Copy</text><rect x="195" y="593" width="157" height="54" rx="27" fill="#235b4e"/><text x="274" y="627" text-anchor="middle" fill="#fff" font-family="Arial" font-size="18" font-weight="700">Insert  ↵</text>
+  <text x="190" y="758" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="25" font-weight="700">D · Expandable modes</text><text x="190" y="791" text-anchor="middle" fill="#73817b" font-family="Arial" font-size="18">Selected mode expands; others slide away.</text>
+ </g>
+ <!-- E -->
+ <g transform="translate(560,190)">
+  <rect width="380" height="720" rx="44" fill="#f7e8d9"/>
+  <text x="34" y="61" fill="#235b4e" font-family="Arial" font-size="26" font-weight="700">veya</text>
+  <circle cx="336" cy="49" r="24" fill="#fff" opacity=".72"/><path d="M328 41l16 16m0-16l-16 16" stroke="#235b4e" stroke-width="4" stroke-linecap="round"/>
+  <text x="190" y="137" text-anchor="middle" fill="#73817b" font-family="Arial" font-size="15" font-weight="700">1 OF 5</text>
+  <circle cx="190" cy="210" r="46" fill="#235b4e"/><text x="190" y="222" text-anchor="middle" fill="#fff" font-family="Arial" font-size="38">☺</text>
+  <text x="190" y="290" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="22" font-weight="700">Casual</text>
+  <path d="M70 210h28m184 0h28" stroke="#73817b" stroke-width="4" stroke-linecap="round"/><path d="M70 210l12-10m-12 10l12 10m228-10l-12-10m12 10l-12 10" stroke="#73817b" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="158" cy="325" r="4" fill="#235b4e"/><circle cx="174" cy="325" r="4" fill="#73817b"/><circle cx="190" cy="325" r="4" fill="#73817b"/><circle cx="206" cy="325" r="4" fill="#73817b"/><circle cx="222" cy="325" r="4" fill="#73817b"/>
+  <text x="34" y="400" fill="#173f38" font-family="Arial" font-size="29" font-weight="700">What’s up?</text>
+  <rect x="28" y="593" width="156" height="54" rx="27" fill="#fff" opacity=".75"/><text x="106" y="627" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="18" font-weight="700">▢  Copy</text><rect x="195" y="593" width="157" height="54" rx="27" fill="#235b4e"/><text x="274" y="627" text-anchor="middle" fill="#fff" font-family="Arial" font-size="18" font-weight="700">Insert  ↵</text>
+  <text x="190" y="758" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="25" font-weight="700">E · Paged selector</text><text x="190" y="791" text-anchor="middle" fill="#73817b" font-family="Arial" font-size="18">Swipe or tap arrows; card settles with spring.</text>
+ </g>
+ <!-- F -->
+ <g transform="translate(1020,190)">
+  <rect width="380" height="720" rx="44" fill="#f7e8d9"/>
+  <text x="34" y="61" fill="#235b4e" font-family="Arial" font-size="26" font-weight="700">veya</text>
+  <circle cx="336" cy="49" r="24" fill="#fff" opacity=".72"/><path d="M328 41l16 16m0-16l-16 16" stroke="#235b4e" stroke-width="4" stroke-linecap="round"/>
+  <text x="34" y="145" fill="#173f38" font-family="Arial" font-size="29" font-weight="700">What’s up?</text>
+  <text x="34" y="188" fill="#73817b" font-family="Arial" font-size="16">Casual</text>
+  <rect x="20" y="470" width="340" height="105" rx="32" fill="#fff" opacity=".7"/>
+  <circle cx="61" cy="520" r="25" fill="#235b4e"/><text x="61" y="528" text-anchor="middle" fill="#fff" font-family="Arial" font-size="20">☺</text><text x="61" y="559" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="10" font-weight="700">Casual</text>
+  <circle cx="126" cy="520" r="25" fill="#fff"/><text x="126" y="528" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="20">♧</text><text x="126" y="559" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="10" font-weight="700">Formal</text>
+  <circle cx="191" cy="520" r="25" fill="#fff"/><text x="191" y="528" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="20">▣</text><text x="191" y="559" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="10" font-weight="700">Work</text>
+  <circle cx="256" cy="520" r="25" fill="#fff"/><text x="256" y="527" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="16">Aa</text><text x="256" y="559" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="9" font-weight="700">Malayalam</text>
+  <circle cx="321" cy="520" r="25" fill="#fff"/><text x="321" y="528" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="15">അ</text><text x="321" y="559" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="9" font-weight="700">മലയാളം</text>
+  <rect x="28" y="593" width="156" height="54" rx="27" fill="#fff" opacity=".75"/><text x="106" y="627" text-anchor="middle" fill="#235b4e" font-family="Arial" font-size="18" font-weight="700">▢  Copy</text><rect x="195" y="593" width="157" height="54" rx="27" fill="#235b4e"/><text x="274" y="627" text-anchor="middle" fill="#fff" font-family="Arial" font-size="18" font-weight="700">Insert  ↵</text>
+  <text x="190" y="758" text-anchor="middle" fill="#173f38" font-family="Arial" font-size="25" font-weight="700">F · Docked mode bar</text><text x="190" y="791" text-anchor="middle" fill="#73817b" font-family="Arial" font-size="18">Selected icon expands gently; panel stays tidy.</text>
+ </g>
+</svg>

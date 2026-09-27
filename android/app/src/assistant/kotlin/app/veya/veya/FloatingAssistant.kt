@@ -5,6 +5,7 @@ import android.animation.ValueAnimator
 import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.*
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaRecorder
 import android.util.Log
@@ -14,6 +15,8 @@ import android.view.*
 import android.view.accessibility.*
 import android.view.animation.OvershootInterpolator
 import android.widget.*
+import com.google.android.gms.tasks.Tasks
+import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
@@ -54,6 +57,9 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private val lime = Color.rgb(217, 242, 145)
  private val lavender = Color.rgb(236, 241, 230)
  private val teal = Color.rgb(61, 25, 92)
+ private val mango = Color.rgb(255, 138, 32)
+ private val reviewSurface = Color.rgb(16, 18, 19)
+ private val reviewCard = Color.rgb(23, 25, 26)
  private var x = 20; private var y = 300
  private var sensor: SensorManager? = null
  private var lastShake = 0L
@@ -132,9 +138,14 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   setColor(Color.rgb(255, 249, 240)); cornerRadius = dp(30).toFloat()
   setStroke(dp(1), Color.rgb(232, 218, 202))
  }
- private fun responseBackground() = GradientDrawable().apply {
-  setColor(Color.rgb(255, 249, 240)); cornerRadius = dp(28).toFloat()
-  setStroke(dp(1), Color.rgb(232, 218, 202))
+ private fun responseBackground() = GradientDrawable(
+  // A deliberately visible version of the Home screen's Ready-to-go gradient.
+  // The third stop gives the compact overlay depth instead of reading as flat
+  // charcoal in dimmed apps.
+  GradientDrawable.Orientation.TL_BR,
+  intArrayOf(Color.rgb(20, 5, 39), Color.rgb(39, 12, 73), Color.rgb(61, 24, 108)),
+ ).apply {
+  cornerRadius = dp(20).toFloat()
  }
  private fun text(value: String, size: Float = 16f) = TextView(this).apply {
   text = value; textSize = size; setTextColor(lime); gravity = Gravity.CENTER; setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -182,6 +193,170 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   lp.gravity = Gravity.TOP or Gravity.LEFT
   lp.x = x.coerceIn(0, max(0, resources.displayMetrics.widthPixels - dp(width))); lp.y = y
   panel = view; params = lp; content(view); wm.addView(view, lp)
+ }
+ private inner class MovableResultSheet : LinearLayout(this@FloatingAssistant) {
+  private val touchSlop = ViewConfiguration.get(this@FloatingAssistant).scaledTouchSlop
+  private var startX = 0f
+  private var startY = 0f
+  private var initialX = 0
+  private var initialY = 0
+  private var dragging = false
+  private var gestureStartsInText = false
+  var resultScrollArea: View? = null
+
+  private fun begin(event: MotionEvent) {
+   startX = event.rawX; startY = event.rawY
+   initialX = params?.x ?: 0; initialY = params?.y ?: 0
+   dragging = false
+   resultScrollArea?.let { area ->
+    gestureStartsInText = event.x >= area.left && event.x <= area.right &&
+     event.y >= area.top && event.y <= area.bottom
+   } ?: run { gestureStartsInText = false }
+  }
+  private fun move(event: MotionEvent) {
+   val lp = params ?: return
+   lp.x = (initialX + event.rawX - startX).toInt().coerceIn(
+    0, max(0, resources.displayMetrics.widthPixels - lp.width),
+   )
+   lp.y = (initialY + event.rawY - startY).toInt().coerceIn(
+    dp(8), max(dp(8), resources.displayMetrics.heightPixels - (panel?.height ?: dp(60))),
+   )
+   panel?.let { wm.updateViewLayout(it, lp) }
+  }
+  override fun onInterceptTouchEvent(event: MotionEvent): Boolean = when (event.actionMasked) {
+   MotionEvent.ACTION_DOWN -> { begin(event); false }
+   MotionEvent.ACTION_MOVE -> {
+    if (gestureStartsInText) {
+     false
+    } else {
+     if (!dragging && hypot(event.rawX - startX, event.rawY - startY) > touchSlop) {
+      dragging = true
+      move(event)
+     }
+     dragging
+    }
+   }
+   MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragging
+   else -> dragging
+  }
+  override fun onTouchEvent(event: MotionEvent): Boolean {
+   when (event.actionMasked) {
+    MotionEvent.ACTION_DOWN -> begin(event)
+    MotionEvent.ACTION_MOVE -> {
+     if (gestureStartsInText) return true
+     if (!dragging && hypot(event.rawX - startX, event.rawY - startY) > touchSlop) dragging = true
+     if (dragging) move(event)
+    }
+    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragging = false
+   }
+   return true
+  }
+ }
+ private inner class MiniWaveMark : View(this@FloatingAssistant) {
+  private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = mango }
+  private val mark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+   color = Color.rgb(19,20,21); strokeWidth = dp(3).toFloat(); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; style = Paint.Style.STROKE
+  }
+  override fun onDraw(canvas: Canvas) {
+   val size=min(width,height).toFloat(); val cx=width/2f; val cy=height/2f
+   canvas.drawCircle(cx,cy,size*.47f,fill)
+   val v=Path().apply { moveTo(cx-size*.22f,cy-size*.13f); lineTo(cx,cy+size*.20f); lineTo(cx+size*.22f,cy-size*.13f) }
+   canvas.drawPath(v,mark)
+   canvas.drawLine(cx-size*.18f,cy+size*.25f,cx+size*.18f,cy+size*.25f,mark)
+  }
+ }
+ private inner class StyleGlyph(private val kind: String, private val nativeGlyph: String = "") : View(this@FloatingAssistant) {
+  private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.STROKE; strokeWidth=dp(2).toFloat(); strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
+  private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign=Paint.Align.CENTER; setTypeface(Typeface.DEFAULT_BOLD) }
+  private var selectedAt = 0L
+  var active = false
+   set(value) { field=value; if(value) selectedAt=SystemClock.uptimeMillis(); invalidate() }
+  override fun onDraw(canvas: Canvas) {
+   val animateFor=(SystemClock.uptimeMillis()-selectedAt).coerceAtMost(260)
+   val pulse=if(active) sin(animateFor / 260.0 * Math.PI).toFloat()*.10f else 0f
+   val color=if(active) Color.rgb(26,20,9) else Color.rgb(238,239,235)
+   line.color=color; fill.color=color
+   canvas.save(); canvas.scale(1f+pulse,1f+pulse,width/2f,height/2f)
+   val cx=width/2f; val cy=height/2f; val u=min(width,height).toFloat()
+   when(kind) {
+    "casual" -> {
+     canvas.drawRoundRect(RectF(cx-u*.29f,cy-u*.22f,cx+u*.29f,cy+u*.22f),u*.13f,u*.13f,line)
+     canvas.drawLine(cx-u*.10f,cy+u*.22f,cx-u*.18f,cy+u*.32f,line)
+     listOf(-.09f,0f,.09f).forEach { offset -> canvas.drawLine(cx-u*.13f,cy+u*offset,cx+u*.13f,cy+u*offset,line) }
+    }
+    "formal" -> {
+     val page=Path().apply {
+      moveTo(cx-u*.22f,cy-u*.30f); lineTo(cx+u*.08f,cy-u*.30f); lineTo(cx+u*.22f,cy-u*.16f)
+      lineTo(cx+u*.22f,cy+u*.30f); lineTo(cx-u*.22f,cy+u*.30f); close()
+     }
+     canvas.drawPath(page,line)
+     canvas.drawLine(cx+u*.08f,cy-u*.30f,cx+u*.08f,cy-u*.16f,line)
+     canvas.drawLine(cx+u*.08f,cy-u*.16f,cx+u*.22f,cy-u*.16f,line)
+     listOf(-.06f,.08f,.20f).forEach { offset -> canvas.drawLine(cx-u*.12f,cy+u*offset,cx+u*.11f,cy+u*offset,line) }
+    }
+    else -> {
+     canvas.drawCircle(cx,cy,u*.27f,line)
+     canvas.drawOval(RectF(cx-u*.12f,cy-u*.27f,cx+u*.12f,cy+u*.27f),line)
+     canvas.drawLine(cx-u*.25f,cy,cx+u*.25f,cy,line)
+    }
+   }
+   canvas.restore()
+  if(active && animateFor<260) postInvalidateDelayed(16)
+ }
+}
+ private inner class CopyGlyph : View(this@FloatingAssistant) {
+  private val line=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+   color=Color.rgb(238,239,235); style=Paint.Style.STROKE; strokeWidth=dp(2).toFloat()
+   strokeJoin=Paint.Join.ROUND
+  }
+  override fun onDraw(canvas: Canvas) {
+   val u=min(width,height).toFloat(); val inset=u*.25f; val offset=u*.13f
+   canvas.drawRoundRect(RectF(inset-offset,inset+offset,u-inset-offset,u-inset+offset),u*.10f,u*.10f,line)
+   canvas.drawRoundRect(RectF(inset+offset,inset-offset,u-inset+offset,u-inset-offset),u*.10f,u*.10f,line)
+  }
+ }
+  private inner class CloseGlyph : View(this@FloatingAssistant) {
+  private val line=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+   color=Color.rgb(238,239,235); style=Paint.Style.STROKE; strokeWidth=dp(3).toFloat()
+   strokeCap=Paint.Cap.ROUND
+  }
+  override fun onDraw(canvas: Canvas) {
+   val inset=min(width,height)*.28f
+   canvas.drawLine(inset,inset,width-inset,height-inset,line)
+   canvas.drawLine(width-inset,inset,inset,height-inset,line)
+  }
+ }
+ private fun showResultSheet(content: (LinearLayout) -> Unit) {
+  remove()
+  val screenWidth = resources.displayMetrics.widthPixels
+  val sideMargin = dp(12)
+  val sheetWidth = screenWidth - sideMargin * 2
+  val view = MovableResultSheet().apply {
+   orientation = LinearLayout.VERTICAL
+   background = responseBackground()
+   elevation = dp(18).toFloat()
+   // Reader and dialog share an edge with no empty top or bottom band.
+   setPadding(0, 0, 0, 0)
+  }
+  content(view)
+  view.measure(
+   View.MeasureSpec.makeMeasureSpec(sheetWidth, View.MeasureSpec.EXACTLY),
+   View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+  )
+  val lp = WindowManager.LayoutParams(
+   sheetWidth,
+   WindowManager.LayoutParams.WRAP_CONTENT,
+   WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+   WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+   PixelFormat.TRANSLUCENT,
+  ).apply {
+   gravity = Gravity.TOP or Gravity.LEFT
+   x = sideMargin
+   y = dp(28)
+   flags = flags or WindowManager.LayoutParams.FLAG_DIM_BEHIND
+   dimAmount = .62f
+  }
+  panel = view; params = lp; wm.addView(view, lp)
  }
  private fun draggable(view: View, tap: (() -> Unit)? = null) {
   var sx = 0f; var sy = 0f; var ox = 0; var oy = 0; var moved = false; var downAt = 0L
@@ -398,21 +573,37 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   try {
    val endpoint=prefs.getString("endpoint", "")!!.trimEnd('/')
    val language=prefs.getString("language","en-IN")!!
+   Log.i("VeyaAssistant","Processing request: endpoint=$endpoint selectedLanguage=$language")
    val result=postRecording("$endpoint/process",file,language)
    main.post { if(id==requestId) results(result) }
   } catch(e: Exception) {
    Log.e("VeyaAssistant","Recording processing failed",e)
-   main.post { if(id==requestId) bubble() }
+   main.post {
+    if(id==requestId) {
+     failure(if (e.message?.contains("401") == true || e.message?.contains("403") == true || e.message?.contains("session has expired", ignoreCase = true) == true)
+      "Your Veya session needs to be refreshed. Open Veya and try again."
+      else "We couldn't process that recording. Please try again.")
+    }
+   }
   } finally { file.delete(); if(recordingFile==file) recordingFile=null }
  }
  private fun postRecording(url:String, file:File, language:String):JSONObject {
-  val requestBody=MultipartBody.Builder().setType(MultipartBody.FORM)
-   .addFormDataPart("source_language",language)
-   .addFormDataPart("file","voice.m4a",file.asRequestBody("audio/mp4".toMediaType()))
+  val requestBody=file.asRequestBody("audio/mp4".toMediaType())
+  fun requestFor(token: String?) = Request.Builder()
+   .url(url.removeSuffix("/process") + "/process-audio")
+   .header("X-Veya-Source-Language", language)
+   .apply { token?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Bearer $it") } }
+   .post(requestBody)
    .build()
-  val request=Request.Builder().url(url).post(requestBody).build()
   val started=SystemClock.elapsedRealtime()
-  httpClient.newCall(request).execute().use { response ->
+  var response=httpClient.newCall(requestFor(activeFirebaseToken())).execute()
+  if(response.code==401 || response.code==403) {
+   response.close()
+   // A background accessibility service may outlive the token supplied by
+   // Flutter. Refresh the persisted Firebase session and retry once.
+   response=httpClient.newCall(requestFor(activeFirebaseToken(forceRefresh=true))).execute()
+  }
+  response.use { response ->
    val raw=response.body?.string().orEmpty()
    val data=runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
    Log.i("VeyaAssistant","OkHttp upload + processing: ${SystemClock.elapsedRealtime()-started}ms; protocol=${response.protocol}")
@@ -420,10 +611,28 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    return data
   }
  }
+ private fun activeFirebaseToken(forceRefresh: Boolean=false): String? {
+  val refreshed=runCatching {
+   val user=FirebaseAuth.getInstance().currentUser ?: return@runCatching null
+   Tasks.await(user.getIdToken(forceRefresh),20,TimeUnit.SECONDS).token
+  }.getOrNull()
+  if(!refreshed.isNullOrBlank()) prefs.edit().putString("firebaseIdToken",refreshed).apply()
+  return refreshed ?: prefs.getString("firebaseIdToken","")?.takeIf { it.isNotBlank() }
+ }
  private fun postJson(url: String, body: JSONObject): JSONObject {
-  val request = Request.Builder().url(url)
-   .post(body.toString().toRequestBody("application/json".toMediaType()))
-   .build()
+  val payload = android.util.Base64.encodeToString(
+   body.toString().toByteArray(Charsets.UTF_8),
+   android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING,
+  )
+  val requestBuilder = Request.Builder().url(url)
+   .post(payload.toRequestBody("application/octet-stream".toMediaType()))
+  if (url.endsWith("/styles")) {
+   requestBuilder.url(url.removeSuffix("/styles") + "/styles-raw")
+  }
+  prefs.getString("firebaseIdToken", "")?.takeIf { it.isNotBlank() }?.let {
+   requestBuilder.header("Authorization", "Bearer $it")
+  }
+  val request = requestBuilder.build()
   httpClient.newCall(request).execute().use { response ->
    val raw = response.body?.string().orEmpty()
    if (!response.isSuccessful) error("Style request failed (${response.code}).")
@@ -454,75 +663,182 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   var selected=styles.optString("casual",data.optString("english_text"))
   val original=data.optString("original_text")
   val sourceCode=prefs.getString("language", "en-IN") ?: "en-IN"
+  val detected=data.optString("detected_language", "unknown")
+  val casual=styles.optString("casual",data.optString("english_text"))
+  Log.i(
+   "VeyaAssistant",
+   "Result metadata: detectedLanguage=$detected selectedLanguage=$sourceCode " +
+    "originalChars=${original.length} originalLatin=${original.count { it.isLetter() && it.code < 128 }} " +
+    "casualChars=${casual.length} casualLatin=${casual.count { it.isLetter() && it.code < 128 }}",
+  )
   val language=languageLabels(sourceCode)
-  show(344) { box ->
-   box.background=responseBackground(); box.elevation=dp(12).toFloat(); box.setPadding(dp(12),dp(12),dp(12),dp(12))
-   val content=text(selected,16f).apply {
-    gravity=Gravity.START; setTextColor(ink); setTypeface(null,Typeface.BOLD)
-    setLineSpacing(dp(4).toFloat(), 1f); setPadding(dp(7),dp(10),dp(7),dp(8))
-   }
+  showResultSheet { box ->
    val pages=mutableListOf<Triple<String,String,String>>().apply {
     add(Triple("casual","Casual",styles.optString("casual",data.optString("english_text"))))
-    add(Triple("formal","Formal",styles.optString("formal","")))
+    add(Triple("formal","Formal",styles.optString("formal", casual)))
     add(Triple("original",language.second,original))
    }
    var page=0
    lateinit var refreshPage: () -> Unit
-   val selector=LinearLayout(this).apply {
-    gravity=Gravity.CENTER_VERTICAL
-    setPadding(dp(5),dp(5),dp(5),dp(5))
-    background=GradientDrawable().apply { setColor(Color.rgb(247,232,217)); cornerRadius=dp(18).toFloat() }
+   fun rounded(fill:Int, radius:Int=18, stroke:Int?=null, strokeWidth:Int=1) = GradientDrawable().apply {
+    setColor(fill); cornerRadius=dp(radius).toFloat()
+    stroke?.let { setStroke(dp(strokeWidth),it) }
    }
-   val tabBodies=mutableListOf<LinearLayout>()
-   val tabIcons=mutableListOf<ModeBadge>()
-   val tabLabels=mutableListOf<TextView>()
-   pages.forEachIndexed { index, item ->
-    val tab=LinearLayout(this).apply {
-     orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER; isClickable=true
-     setOnClickListener {
-      // Formal remains quiet until its background request completes.
-      // Do not switch the sheet or expose a loading label while they are pending.
-      if(pages[index].third.isBlank()) return@setOnClickListener
-      if(page!=index) { haptic(); page=index; refreshPage() }
-     }
+   fun layeredSurface(
+    from: Int,
+    to: Int,
+    radius: Int = 18,
+    stroke: Int = Color.rgb(110, 69, 149),
+   ) = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(from, to)).apply {
+    cornerRadius=dp(radius).toFloat()
+    setStroke(dp(1),stroke)
+   }
+   val content=TextView(this).apply {
+    text=selected; textSize=14f; gravity=Gravity.START; setTextColor(Color.rgb(246,246,242)); setTypeface(null,Typeface.NORMAL)
+    setLineSpacing(dp(3).toFloat(),1f); setPadding(dp(12),dp(11),dp(42),dp(10))
+   }
+   val resultScroller=ScrollView(this).apply {
+    addView(content)
+    isVerticalScrollBarEnabled=true; isScrollbarFadingEnabled=false
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+     verticalScrollbarThumbDrawable=rounded(mango,4)
+     verticalScrollbarTrackDrawable=rounded(Color.rgb(64,66,67),4)
     }
-    val icon=ModeBadge().apply { mode=if(item.first=="original") "Aa" else item.first }
-    val label=TextView(this).apply { text=item.second; textSize=8f; gravity=Gravity.CENTER; isSingleLine=true; setTypeface(null,Typeface.BOLD) }
-    tab.addView(icon,LinearLayout.LayoutParams(dp(30),dp(30)))
-    tab.addView(label,LinearLayout.LayoutParams(-1,dp(16)))
-    selector.addView(tab,LinearLayout.LayoutParams(0,dp(48),1f))
-    tabBodies.add(tab); tabIcons.add(icon); tabLabels.add(label)
+    setOnTouchListener { _, event ->
+     when (event.actionMasked) {
+      MotionEvent.ACTION_DOWN -> box.requestDisallowInterceptTouchEvent(true)
+      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> box.requestDisallowInterceptTouchEvent(false)
+     }
+     false
+    }
    }
-   box.addView(selector,LinearLayout.LayoutParams(-1,dp(58)))
+   val viewer=FrameLayout(this).apply {
+    // The reader follows the parent gradient instead of dropping into a
+    // disconnected black rectangle, while remaining dark enough for text.
+    // Avoid a stroke so the tab bridge remains a clean opening into the reader.
+    background=layeredSurface(Color.rgb(26,10,48), Color.rgb(47,18,82), 20, Color.TRANSPARENT)
+    elevation=dp(5).toFloat()
+   }
+   viewer.addView(resultScroller,FrameLayout.LayoutParams(-1,-1).apply { bottomMargin=dp(40) })
+   // Keep the close affordance inside the reader itself.  It is a text glyph,
+   // not an outlined chip, so it remains crisp on every overlay background.
+   val close=TextView(this).apply {
+    text="×"; textSize=30f; gravity=Gravity.CENTER
+    setTextColor(Color.rgb(255,250,244)); setTypeface(null,Typeface.BOLD)
+    contentDescription="Close"
+    elevation=dp(12).toFloat()
+    setOnClickListener { haptic(); bubble() }
+   }
+   viewer.addView(close,FrameLayout.LayoutParams(dp(38),dp(38),Gravity.TOP or Gravity.RIGHT).apply {
+    topMargin=dp(2); rightMargin=dp(3)
+   })
+   content.measure(
+    View.MeasureSpec.makeMeasureSpec(resources.displayMetrics.widthPixels-dp(40),View.MeasureSpec.EXACTLY),
+    View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),
+   )
+   // Three roomy vertical tabs need a taller minimum to keep their icons and
+   // labels fully visible at every text length.
+   val viewerHeight=(content.measuredHeight+dp(70)).coerceIn(dp(210),dp(242))
+   (box as? MovableResultSheet)?.resultScrollArea = viewer
+
+   val grid=LinearLayout(this).apply {
+   orientation=LinearLayout.VERTICAL
+    gravity=Gravity.CENTER
+    // Tabs have their own surface so their labels and icons can breathe.
+    setPadding(dp(6),dp(8),dp(6),dp(8))
+    background=layeredSurface(Color.rgb(31,9,56), Color.rgb(50,18,88),20,Color.rgb(90,53,128))
+    elevation=dp(5).toFloat()
+    clipChildren=false
+   }
+   val cards=mutableListOf<FrameLayout>()
+   val cardIcons=mutableListOf<StyleGlyph>()
+   val iconShells=mutableListOf<FrameLayout>()
+   val cardLabels=mutableListOf<TextView>()
+   pages.forEachIndexed { index, item ->
+     val card=FrameLayout(this).apply {
+      isClickable=true; isFocusable=true
+      setOnClickListener { if(page!=index) { haptic(); page=index; refreshPage() } }
+     }
+     val body=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER }
+     val icon=StyleGlyph(item.first,language.second)
+     val iconShell=FrameLayout(this).apply { foregroundGravity=Gravity.CENTER }
+     iconShell.addView(icon,FrameLayout.LayoutParams(dp(30),dp(30),Gravity.CENTER))
+     val label=TextView(this).apply { text=item.second; textSize=10f; gravity=Gravity.CENTER; isSingleLine=true; setTypeface(null,Typeface.BOLD) }
+     body.addView(iconShell,LinearLayout.LayoutParams(dp(42),dp(38)).apply {
+      gravity=Gravity.CENTER_HORIZONTAL; topMargin=dp(3); bottomMargin=dp(3)
+     })
+     body.addView(label,LinearLayout.LayoutParams(-1,dp(12)))
+     card.addView(body,FrameLayout.LayoutParams(-1,-1))
+     cards.add(card); cardIcons.add(icon); iconShells.add(iconShell); cardLabels.add(label)
+     grid.addView(card,LinearLayout.LayoutParams(-1,0,1f).apply {
+      if(index<pages.lastIndex) bottomMargin=dp(6)
+     })
+   }
+   // Separate surfaces keep the style controls airy while the reader remains
+   // focused on the selected text.
+   val resultBody=FrameLayout(this).apply { clipChildren=false; clipToPadding=false }
+   val tabBridge=View(this).apply {
+    background=rounded(Color.rgb(42,15,75),7)
+   }
+   resultBody.addView(viewer,FrameLayout.LayoutParams(-1,viewerHeight).apply { leftMargin=dp(76) })
+   // This bridge spans the container gap, making the active tab visibly open
+   // into the text it controls.
+   resultBody.addView(tabBridge,FrameLayout.LayoutParams(dp(10),dp(34)).apply { leftMargin=dp(68) })
+   resultBody.addView(grid,FrameLayout.LayoutParams(dp(72),viewerHeight))
+   box.addView(resultBody,LinearLayout.LayoutParams(-1,viewerHeight))
+
    refreshPage = {
     val next=pages[page]
     selectedKey=next.first; selected=next.third; content.text=selected
-    tabIcons.forEachIndexed { index, icon ->
-     icon.active=index==page
-     tabLabels[index].setTextColor(if(index==page) ink else if(pages[index].third.isBlank()) Color.rgb(150,165,159) else Color.rgb(97,93,108))
-     tabBodies[index].animate().cancel()
-     tabBodies[index].scaleX=if(index==page) 1f else .92f
-     tabBodies[index].scaleY=if(index==page) 1f else .92f
-     tabBodies[index].animate().scaleX(1f).scaleY(1f).setDuration(170).setInterpolator(OvershootInterpolator(.6f)).start()
+    resultScroller.scrollTo(0,0)
+    cards.forEachIndexed { index, card ->
+     val active=index==page
+     // Selection lives on the icon and label only—never on a large purple tile.
+     card.background=ColorDrawable(Color.TRANSPARENT)
+     iconShells[index].background=if(active) rounded(mango,14) else rounded(Color.rgb(31,9,56),14)
+     iconShells[index].elevation=if(active) dp(5).toFloat() else 0f
+     cardIcons[index].active=active
+     cardLabels[index].setTextColor(if(active) mango else Color.rgb(244,244,241))
+     card.animate().cancel()
+     card.translationY=if(active) -dp(2).toFloat() else 0f
+     card.scaleX=if(active) 1.035f else 1f
+     card.scaleY=if(active) 1.035f else 1f
+     card.animate().translationY(0f).scaleX(1f).scaleY(1f).setDuration(190).setInterpolator(OvershootInterpolator(.75f)).start()
     }
-    content.animate().cancel()
-    content.alpha=0f; content.translationY=dp(7).toFloat()
-    content.animate().alpha(1f).translationY(0f).setDuration(180).start()
+    val bridgeLp=tabBridge.layoutParams as FrameLayout.LayoutParams
+    bridgeLp.topMargin=page*(viewerHeight/pages.size)+(viewerHeight/pages.size-dp(34))/2
+    tabBridge.layoutParams=bridgeLp
+    tabBridge.pivotX=0f; tabBridge.scaleX=0f; tabBridge.alpha=.35f
+    tabBridge.animate().alpha(1f).scaleX(1f).setDuration(220).setInterpolator(OvershootInterpolator(.8f)).start()
+    content.animate().cancel(); content.alpha=0f; content.translationY=dp(5).toFloat()
+    content.animate().alpha(1f).translationY(0f).setDuration(150).start()
    }
    refreshPage()
-   box.addView(ScrollView(this).apply { addView(content) },LinearLayout.LayoutParams(-1,dp(142)))
-   val actions=LinearLayout(this); box.addView(actions)
-   fun action(label: String, primary: Boolean, onTap: () -> Unit) = TextView(this).apply {
-    text=label; textSize=13f; gravity=Gravity.CENTER; setTypeface(null,Typeface.BOLD)
-    setTextColor(if(primary) Color.WHITE else ink)
-    background=GradientDrawable().apply {
-     setColor(if(primary) ink else Color.rgb(247,232,217)); cornerRadius=dp(18).toFloat()
-     if(!primary) setStroke(dp(1), Color.rgb(232,218,202))
+
+   val footer=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
+   val copy=CopyGlyph().apply {
+    contentDescription="Copy message"
+    setOnClickListener {
+     haptic()
+     (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(
+      android.content.ClipData.newPlainText("Veya message",selected)
+     )
+     Toast.makeText(this@FloatingAssistant,"Copied",Toast.LENGTH_SHORT).show()
     }
-    setOnClickListener { haptic(); onTap() }
    }
-   actions.addView(action("Close",false) { bubble() },LinearLayout.LayoutParams(0,dp(44),1f).apply { setMargins(0,0,dp(8),0) })
-   actions.addView(action("Insert",true) { insert(selected) },LinearLayout.LayoutParams(0,dp(44),1f))
+   footer.addView(copy,LinearLayout.LayoutParams(dp(28),dp(28)))
+   footer.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+   val insert=TextView(this).apply {
+    text="Insert"; textSize=14f; gravity=Gravity.CENTER; setTextColor(Color.rgb(26,20,9)); setTypeface(null,Typeface.BOLD)
+    // Keep the action and the active style state on the one Mango accent.
+    background=rounded(mango,25); setOnClickListener { haptic(); insert(selected) }
+   }
+   footer.addView(insert,LinearLayout.LayoutParams(dp(66),dp(30)))
+   // Keep actions within the reader so each selected tab is a self-contained
+   // review panel: read, scroll, copy, or insert without another footer.
+   viewer.addView(footer,FrameLayout.LayoutParams(-1,dp(36),Gravity.BOTTOM).apply {
+    leftMargin=dp(8); rightMargin=dp(8); bottomMargin=dp(4)
+   })
    // Casual is shown as soon as Sarvam returns it. The slower two style
    // rewrites arrive independently and update their tabs without blocking
    // the result sheet or the Insert action.

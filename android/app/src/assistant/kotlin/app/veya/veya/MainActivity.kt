@@ -7,10 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.Bundle
 import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.google.android.gms.auth.api.phone.SmsRetriever
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Status
@@ -23,6 +25,10 @@ class MainActivity : FlutterActivity() {
  private var permissionResult: MethodChannel.Result? = null
  private var otpReceiver: BroadcastReceiver? = null
  private lateinit var bridge: MethodChannel
+ override fun onCreate(savedInstanceState: Bundle?) {
+  installSplashScreen()
+  super.onCreate(savedInstanceState)
+ }
  override fun configureFlutterEngine(engine: FlutterEngine) {
   super.configureFlutterEngine(engine)
   bridge = MethodChannel(engine.dartExecutor.binaryMessenger, "app.veya/assistant")
@@ -32,7 +38,7 @@ class MainActivity : FlutterActivity() {
     "configure" -> {
      val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
      val edit = prefs.edit()
-     for (key in listOf("endpoint", "language")) edit.putString(key, args[key]?.toString() ?: "")
+     for (key in listOf("endpoint", "language", "firebaseIdToken")) edit.putString(key, args[key]?.toString() ?: "")
      edit.putFloat("floatingIconScale", (args["floatingIconScale"] as? Number)?.toFloat() ?: 1f)
      edit.putFloat("floatingIconOpacity", (args["floatingIconOpacity"] as? Number)?.toFloat() ?: .9f)
      edit.putStringSet("allowedApps", (args["allowedApps"] as? List<*>)?.map { it.toString() }?.toSet() ?: emptySet())
@@ -100,8 +106,8 @@ class MainActivity : FlutterActivity() {
     Log.d("VeyaOtp", "SMS Retriever status=${status.statusCode}")
     if (status.statusCode != CommonStatusCodes.SUCCESS) return
     val message = intent.extras?.getString(SmsRetriever.EXTRA_SMS_MESSAGE) ?: return
-    val code = Regex("\\b\\d{4}\\b").find(message)?.value ?: return
-    Log.d("VeyaOtp", "Received a four-digit OTP")
+    val code = Regex("\\b\\d{6}\\b").find(message)?.value ?: return
+    Log.d("VeyaOtp", "Received OTP from SMS Retriever")
     bridge.invokeMethod("otpReceived", code)
     stopOtpListener()
    }

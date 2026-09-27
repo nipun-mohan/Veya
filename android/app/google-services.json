@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "233466884801",
+    "project_id": "project-ad772018-14cd-4695-ad6",
+    "storage_bucket": "project-ad772018-14cd-4695-ad6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:233466884801:android:1ecd0badc8b583e80bda40",
+        "android_client_info": {
+          "package_name": "app.veya.veya"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBCB5nvwQ8-kER0oieZEAQoPi3orlQHVtk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -38,119 +38,110 @@ class _AccessibilityConsentScreenState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-          appBar: AppBar(
-            leading: IconButton(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.arrow_back_rounded),
+    appBar: AppBar(
+      leading: IconButton(
+        onPressed: () => Navigator.pop(context),
+        icon: const Icon(Icons.arrow_back_rounded),
+      ),
+      title: LText('Enable floating assistant'),
+    ),
+    body: SafeArea(
+      top: false,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
+        children: [
+          const Eyebrow('ONE-TIME SETUP'),
+          const SizedBox(height: 10),
+          LText(
+            'Allow Veya to\nwrite in your apps.',
+            style: TextStyle(
+              fontSize: 39,
+              height: 1.03,
+              letterSpacing: -2.1,
+              fontWeight: FontWeight.w900,
             ),
-            title: LText('Enable floating assistant'),
           ),
-          body: SafeArea(
-            top: false,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
+          const SizedBox(height: 12),
+          LText(
+            'Accessibility lets Veya place your approved voice text into the message field you selected.',
+            style: TextStyle(
+              color: VeyaColors.muted,
+              fontSize: 15,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 22),
+          const _WalkthroughPreview(),
+          const SizedBox(height: 22),
+          const Eyebrow('IN SETTINGS'),
+          const SizedBox(height: 10),
+          const _Step(
+            number: '1',
+            icon: Icons.apps_rounded,
+            title: 'Open Installed apps',
+            subtitle: 'Find it in Android Accessibility settings.',
+          ),
+          const _Step(
+            number: '2',
+            icon: Icons.record_voice_over_outlined,
+            title: 'Select Veya',
+            subtitle: 'Open Veya floating assistant.',
+          ),
+          const _Step(
+            number: '3',
+            icon: Icons.toggle_on_outlined,
+            title: 'Turn on access',
+            subtitle: 'Enable the main Veya toggle. Leave shortcuts off.',
+          ),
+          const SizedBox(height: 18),
+          SurfaceCard(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Eyebrow('ONE-TIME SETUP'),
-                const SizedBox(height: 10),
                 LText(
-                  'Allow Veya to\nwrite in your apps.',
-                  style: TextStyle(
-                    fontSize: 39,
-                    height: 1.03,
-                    letterSpacing: -2.1,
-                    fontWeight: FontWeight.w900,
-                  ),
+                  'What Veya accesses',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 LText(
-                  'Accessibility lets Veya place your approved voice text into the message field you selected.',
+                  '• The active text field, so Veya knows where to insert your approved text.\n• The name of the current app, to work only in apps you selected.\n• Veya never sends a message, reads passwords, or appears in sensitive fields.',
                   style: TextStyle(
                     color: VeyaColors.muted,
-                    fontSize: 15,
+                    fontSize: 13,
                     height: 1.45,
                   ),
-                ),
-                const SizedBox(height: 22),
-                const _WalkthroughPreview(),
-                const SizedBox(height: 22),
-                const Eyebrow('IN SETTINGS'),
-                const SizedBox(height: 10),
-                const _Step(
-                  number: '1',
-                  icon: Icons.apps_rounded,
-                  title: 'Open Installed apps',
-                  subtitle: 'Find it in Android Accessibility settings.',
-                ),
-                const _Step(
-                  number: '2',
-                  icon: Icons.record_voice_over_outlined,
-                  title: 'Select Veya',
-                  subtitle: 'Open Veya floating assistant.',
-                ),
-                const _Step(
-                  number: '3',
-                  icon: Icons.toggle_on_outlined,
-                  title: 'Turn on access',
-                  subtitle: 'Enable the main Veya toggle. Leave shortcuts off.',
-                ),
-                const SizedBox(height: 18),
-                SurfaceCard(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      LText(
-                        'What Veya accesses',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      LText(
-                        '• The active text field, so Veya knows where to insert your approved text.\n• The name of the current app, to work only in apps you selected.\n• Veya never sends a message, reads passwords, or appears in sensitive fields.',
-                        style: TextStyle(
-                          color: VeyaColors.muted,
-                          fontSize: 13,
-                          height: 1.45,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                CheckboxListTile(
-                  value: agreed,
-                  onChanged: (value) => setState(() => agreed = value ?? false),
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: LText(
-                    'I understand and agree',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                SizedBox(
-                  height: 54,
-                  child: FilledButton(
-                    onPressed: agreed && !opening ? _openSettings : null,
-                    child: opening
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : LText('Open settings'),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: LText('Not now'),
                 ),
               ],
             ),
           ),
-        );
+          const SizedBox(height: 12),
+          CheckboxListTile(
+            value: agreed,
+            onChanged: (value) => setState(() => agreed = value ?? false),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: LText(
+              'I understand and agree',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+            ),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            height: 54,
+            child: FilledButton(
+              onPressed: agreed && !opening ? _openSettings : null,
+              child: opening ? const VeyaLoader() : LText('Open settings'),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: LText('Not now'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _WalkthroughPreview extends StatefulWidget {

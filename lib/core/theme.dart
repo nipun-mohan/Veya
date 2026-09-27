@@ -63,6 +63,8 @@ ThemeData veyaTheme() {
       style: FilledButton.styleFrom(
         minimumSize: const Size(0, 54),
         padding: const EdgeInsets.symmetric(horizontal: 24),
+        disabledBackgroundColor: VeyaColors.soft,
+        disabledForegroundColor: VeyaColors.ink,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     ),
@@ -87,6 +89,10 @@ ThemeData veyaTheme() {
       ),
     ),
     dividerTheme: const DividerThemeData(color: VeyaColors.line, space: 1),
+    progressIndicatorTheme: const ProgressIndicatorThemeData(
+      color: VeyaColors.ink,
+      strokeWidth: 2.8,
+    ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
       backgroundColor: VeyaColors.ink,

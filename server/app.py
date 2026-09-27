@@ -1,5 +1,6 @@
 """Veya's Sarvam-only speech and writing gateway."""
 import asyncio
+import base64
 import json
 import os
 import subprocess
@@ -9,6 +10,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+import firebase_admin
+from firebase_admin import auth as firebase_auth
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
@@ -42,6 +45,27 @@ MAYURA_COLLOQUIAL_LANGUAGES = {
     'ta-IN', 'te-IN',
 }
 
+# Unicode blocks used to verify that the selected Indic language is returned
+# in its native writing system, rather than as a Latin transliteration.
+NATIVE_SCRIPT_RANGES = {
+    'as-IN': ((0x0980, 0x09FF),),
+    'bn-IN': ((0x0980, 0x09FF),),
+    'gu-IN': ((0x0A80, 0x0AFF),),
+    'hi-IN': ((0x0900, 0x097F),),
+    'kn-IN': ((0x0C80, 0x0CFF),),
+    'ml-IN': ((0x0D00, 0x0D7F),),
+    'mr-IN': ((0x0900, 0x097F),),
+    'ne-IN': ((0x0900, 0x097F),),
+    'pa-IN': ((0x0A00, 0x0A7F),),
+    'ta-IN': ((0x0B80, 0x0BFF),),
+    'te-IN': ((0x0C00, 0x0C7F),),
+    'ur-IN': ((0x0600, 0x06FF),),
+}
+TRANSLITERATION_LANGUAGES = {
+    'bn-IN', 'gu-IN', 'hi-IN', 'kn-IN', 'ml-IN', 'mr-IN', 'pa-IN',
+    'ta-IN', 'te-IN',
+}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -54,6 +78,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title='Veya Translation Gateway', lifespan=lifespan)
+
+
+def verified_firebase_user(request: Request) -> dict[str, object]:
+    header = request.headers.get('authorization', '')
+    if not header.startswith('Bearer '):
+        raise HTTPException(401, 'Authentication is required.')
+    token = header.removeprefix('Bearer ').strip()
+    if not token:
+        raise HTTPException(401, 'Authentication is required.')
+    try:
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app()
+        return firebase_auth.verify_id_token(token, check_revoked=True)
+    except Exception as error:
+        print(f'Firebase token rejected: {error!r}', flush=True)
+        raise HTTPException(401, 'Your session has expired. Please verify your number again.')
 
 
 class TranslateRequest(BaseModel):
@@ -100,12 +140,18 @@ def gateway_error(product: str, response: httpx.Response) -> HTTPException:
 async def saaras_transcribe(
     client: httpx.AsyncClient, audio: bytes, source_language: str,
     filename: str | None, content_type: str | None,
-) -> str:
-    language = ensure_language(source_language)
+) -> tuple[str, str]:
+    # The language chosen in Veya is the desired output language. A recording
+    # can still be spoken in another language, so let Saaras identify it first.
+    ensure_language(source_language)
+    # When Veya is set to English, use Saaras' audio-to-English mode. It
+    # translates the speech before any Roman Indic transcript can be emitted,
+    # which is more reliable than trying to identify a Latin-script result.
+    mode = 'translate' if source_language == 'en-IN' else 'transcribe'
     response = await client.post(
         f'{SARVAM_BASE_URL}/speech-to-text',
         headers=sarvam_headers(),
-        data={'model': SARVAM_STT_MODEL, 'mode': 'transcribe', 'language_code': language},
+        data={'model': SARVAM_STT_MODEL, 'mode': mode, 'language_code': 'unknown'},
         files={'file': (Path(filename or 'recording.m4a').name, audio, content_type or 'audio/mp4')},
     )
     if response.status_code >= 300:
@@ -116,7 +162,11 @@ async def saaras_transcribe(
             raise AudioDurationLimitExceeded
         raise gateway_error('Saaras transcription', response)
     try:
-        return str(response.json()['transcript']).strip()
+        payload = response.json()
+        return (
+            str(payload['transcript']).strip(),
+            str(payload.get('language_code') or 'auto').strip(),
+        )
     except (KeyError, TypeError, ValueError):
         raise HTTPException(502, 'Saaras returned an invalid transcription response.')
 
@@ -139,7 +189,7 @@ def split_audio_into_saaras_segments(source: Path, output_dir: Path) -> list[Pat
 async def transcribe_recording(
     client: httpx.AsyncClient, audio: bytes, source_language: str,
     filename: str | None, content_type: str | None,
-) -> str:
+) -> tuple[str, str]:
     """Use the fast direct path, splitting only recordings over 30 seconds."""
     try:
         return await saaras_transcribe(
@@ -161,19 +211,39 @@ async def transcribe_recording(
             if not segments:
                 raise HTTPException(502, 'Could not split the long recording.')
             transcripts = []
+            detected_languages = []
             for segment in segments:
-                text = await saaras_transcribe(
+                text, detected_language = await saaras_transcribe(
                     client, segment.read_bytes(), source_language,
                     segment.name, 'audio/mp4',
                 )
                 if text:
                     transcripts.append(text)
-            return ' '.join(transcripts).strip()
+                    detected_languages.append(detected_language)
+            detected_language = (
+                detected_languages[0]
+                if detected_languages and len(set(detected_languages)) == 1
+                else 'auto'
+            )
+            return ' '.join(transcripts).strip(), detected_language
 
 
-async def sarvam_translate(client: httpx.AsyncClient, text: str, source_language: str) -> str:
-    language = ensure_language(source_language)
-    if language == 'en-IN':
+def translation_source_language(language: str) -> str:
+    """Allow the provider to detect mixed or unrecognised STT output."""
+    if language == 'auto' or language in LANGUAGE_NAMES:
+        return language
+    if language.lower().startswith('en'):
+        return 'en-IN'
+    return 'auto'
+
+
+async def sarvam_translate(
+    client: httpx.AsyncClient, text: str, source_language: str,
+    target_language: str = 'en-IN',
+) -> str:
+    language = translation_source_language(source_language)
+    target = ensure_language(target_language)
+    if language == target:
         return text.strip()
     response = await client.post(
         f'{SARVAM_BASE_URL}/translate',
@@ -181,7 +251,7 @@ async def sarvam_translate(client: httpx.AsyncClient, text: str, source_language
         json={
             'input': text,
             'source_language_code': language,
-            'target_language_code': 'en-IN',
+            'target_language_code': target,
             'model': 'sarvam-translate:v1',
             'mode': 'formal',
         },
@@ -192,6 +262,60 @@ async def sarvam_translate(client: httpx.AsyncClient, text: str, source_language
         return str(response.json()['translated_text']).strip()
     except (KeyError, TypeError, ValueError):
         raise HTTPException(502, 'Sarvam returned an invalid translation response.')
+
+
+async def normalize_transcript(
+    client: httpx.AsyncClient, transcript: str, detected_language: str,
+    selected_language: str,
+) -> str:
+    """Convert speech into the selected language's normal native script."""
+    source = translation_source_language(detected_language)
+    normalized = transcript if source == selected_language else await sarvam_translate(
+        client, transcript, source, selected_language,
+    )
+    if not needs_native_script(normalized, selected_language):
+        return normalized
+    if selected_language in TRANSLITERATION_LANGUAGES:
+        return await sarvam_transliterate_to_native(client, normalized, selected_language)
+    # The transliteration endpoint does not cover every Veya language. The
+    # translation model supports them all and returns their native script.
+    return await sarvam_translate(client, normalized, 'auto', selected_language)
+
+
+def needs_native_script(text: str, language: str) -> bool:
+    ranges = NATIVE_SCRIPT_RANGES.get(language)
+    letters = [char for char in text if char.isalpha()]
+    if not ranges or not letters:
+        return False
+    native_letters = sum(
+        any(start <= ord(char) <= end for start, end in ranges)
+        for char in letters
+    )
+    # Do not accept a romanized sentence merely because it contains one native
+    # character. Code-mixed output still passes when the selected script is the
+    # dominant script, while Latin-dominant output is converted.
+    return native_letters / len(letters) < 0.60
+
+
+async def sarvam_transliterate_to_native(
+    client: httpx.AsyncClient, text: str, target_language: str,
+) -> str:
+    response = await client.post(
+        f'{SARVAM_BASE_URL}/transliterate',
+        headers={**sarvam_headers(), 'Content-Type': 'application/json'},
+        json={
+            'input': text,
+            'source_language_code': 'en-IN',
+            'target_language_code': target_language,
+            'numerals_format': 'international',
+        },
+    )
+    if response.status_code >= 300:
+        raise gateway_error('Sarvam native-script conversion', response)
+    try:
+        return str(response.json()['transliterated_text']).strip()
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(502, 'Sarvam returned an invalid native-script conversion.')
 
 
 async def mayura_casual_translate(
@@ -294,14 +418,12 @@ async def create_response(client: httpx.AsyncClient, transcript: str, source_lan
             'english_text': transcript,
             'styles': {'casual': transcript},
         }
-    if source_language in MAYURA_COLLOQUIAL_LANGUAGES:
-        # The result sheet appears after one post-transcription provider call.
-        # Formal and the standard English translation load independently.
-        casual = await mayura_casual_translate_long(client, transcript, source_language)
-        english = ''
-    else:
-        english = await sarvam_translate(client, transcript, source_language)
-        casual = english
+    # Mayura's modern-colloquial mode may return a Latin transliteration for
+    # some Indic inputs. Sarvam Translate consistently returns English here;
+    # use it for the first visible Casual tab and reuse it for Formal's
+    # background rewrite.
+    english = await sarvam_translate(client, transcript, source_language)
+    casual = english
     return {
         'original_text': transcript,
         'english_text': english,
@@ -314,10 +436,10 @@ async def measure_process_time(request, call_next):
     global last_process_duration_ms
     started = time.perf_counter()
     response = await call_next(request)
-    if request.url.path == '/process':
+    if request.url.path in {'/process', '/process-audio'}:
         last_process_duration_ms = round((time.perf_counter() - started) * 1000)
         response.headers['X-Veya-Process-Ms'] = str(last_process_duration_ms)
-        print(f'Veya /process: {last_process_duration_ms}ms', flush=True)
+        print(f'Veya {request.url.path}: {last_process_duration_ms}ms', flush=True)
     return response
 
 
@@ -339,6 +461,7 @@ def health():
 @app.post('/translate')
 async def translate_compat(payload: TranslateRequest, request: Request):
     """Serve older app builds that translate an already-transcribed string."""
+    verified_firebase_user(request)
     ensure_sarvam()
     ensure_language(payload.source_language)
     try:
@@ -359,6 +482,7 @@ async def transcribe_compat(
     request: Request, file: UploadFile = File(...), source_language: str = Form(...),
 ):
     """Serve older app builds that upload audio before calling /translate."""
+    verified_firebase_user(request)
     ensure_sarvam()
     ensure_language(source_language)
     try:
@@ -367,13 +491,23 @@ async def transcribe_compat(
             raise HTTPException(400, 'No recording was uploaded.')
         if len(audio) > 20 * 1024 * 1024:
             raise HTTPException(413, 'Recording is too large.')
-        transcript = await transcribe_recording(
+        transcript, detected_language = await transcribe_recording(
             request.app.state.sarvam_client, audio, source_language,
             file.filename, file.content_type,
         )
         if not transcript:
             raise HTTPException(422, 'No speech was detected. Please try again.')
-        return {'transcript': transcript, 'english': transcript}
+        normalized = await normalize_transcript(
+            request.app.state.sarvam_client, transcript,
+            detected_language, source_language,
+        )
+        return {
+            'transcript': normalized,
+            'english': await sarvam_translate(
+                request.app.state.sarvam_client, normalized, source_language,
+            ),
+            'detected_language': detected_language,
+        }
     except httpx.TimeoutException:
         raise HTTPException(504, 'Saaras transcription timed out. Please retry.')
     except httpx.RequestError as error:
@@ -385,6 +519,7 @@ async def transcribe_compat(
 
 @app.post('/styles')
 async def deferred_styles(req: DeferredStylesRequest, request: Request):
+    verified_firebase_user(request)
     ensure_sarvam()
     ensure_language(req.source_language)
     try:
@@ -402,38 +537,105 @@ async def deferred_styles(req: DeferredStylesRequest, request: Request):
         raise HTTPException(502, 'Cannot reach Sarvam.')
 
 
-@app.post('/process')
-async def process(
-    request: Request, file: UploadFile = File(...), source_language: str = Form(...),
+@app.post('/styles-raw')
+async def deferred_styles_raw(request: Request):
+    """Accept opaque style payloads without asking the edge WAF to parse text."""
+    if request.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/octet-stream':
+        raise HTTPException(415, 'Use the Veya style payload format.')
+    verified_firebase_user(request)
+    try:
+        encoded = await request.body()
+        decoded = base64.urlsafe_b64decode(encoded + b'=' * (-len(encoded) % 4))
+        req = DeferredStylesRequest.model_validate_json(decoded)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(400, 'Invalid style payload.')
+    ensure_sarvam()
+    ensure_language(req.source_language)
+    try:
+        styles = await sarvam_deferred_styles(
+            request.app.state.sarvam_client,
+            req.original_text,
+            req.english_text,
+            req.source_language,
+        )
+        return {'styles': styles}
+    except httpx.TimeoutException:
+        raise HTTPException(504, 'Style generation timed out. Please retry.')
+    except httpx.RequestError as error:
+        print(f'Sarvam styles connection error: {error!r}', flush=True)
+        raise HTTPException(502, 'Cannot reach Sarvam.')
+
+
+async def process_audio_bytes(
+    request: Request,
+    audio: bytes,
+    source_language: str,
+    filename: str,
+    content_type: str,
 ):
     global last_process_breakdown_ms
+    verified_firebase_user(request)
     ensure_sarvam()
     ensure_language(source_language)
     try:
-        audio = await file.read(20 * 1024 * 1024 + 1)
         if not audio:
             raise HTTPException(400, 'No recording was uploaded.')
         if len(audio) > 20 * 1024 * 1024:
             raise HTTPException(413, 'Recording is too large.')
         transcription_started = time.perf_counter()
-        transcript = await transcribe_recording(
-            request.app.state.sarvam_client, audio, source_language, file.filename, file.content_type,
+        transcript, detected_language = await transcribe_recording(
+            request.app.state.sarvam_client, audio, source_language, filename, content_type,
         )
         transcription_ms = round((time.perf_counter() - transcription_started) * 1000)
         if not transcript:
             raise HTTPException(422, 'No speech was detected. Please try again.')
         response_started = time.perf_counter()
-        result = await create_response(request.app.state.sarvam_client, transcript, source_language)
+        normalized_transcript = await normalize_transcript(
+            request.app.state.sarvam_client, transcript,
+            detected_language, source_language,
+        )
+        result = await create_response(
+            request.app.state.sarvam_client, normalized_transcript, source_language,
+        )
         response_ms = round((time.perf_counter() - response_started) * 1000)
         last_process_breakdown_ms = {
             'transcription': transcription_ms,
             'initial_translation': response_ms,
         }
-        return result
+        return {**result, 'detected_language': detected_language}
     except httpx.TimeoutException:
         raise HTTPException(504, 'Sarvam processing timed out. Please retry.')
     except httpx.RequestError as error:
         print(f'Saaras processing connection error: {error!r}', flush=True)
         raise HTTPException(502, 'Cannot reach Sarvam.')
+
+
+@app.post('/process')
+async def process(
+    request: Request, file: UploadFile = File(...), source_language: str = Form(...),
+):
+    """Compatibility endpoint for existing multipart clients."""
+    audio = await file.read(20 * 1024 * 1024 + 1)
+    try:
+        return await process_audio_bytes(
+            request, audio, source_language, file.filename or 'recording.m4a',
+            file.content_type or 'audio/mp4',
+        )
     finally:
         await file.close()
+
+
+@app.post('/process-audio')
+async def process_raw_audio(request: Request):
+    """Accept a direct M4A body so Cloud Armor never parses binary as form data."""
+    source_language = request.headers.get('x-veya-source-language', '')
+    if request.headers.get('content-type', '').split(';', 1)[0].strip() != 'audio/mp4':
+        raise HTTPException(415, 'Upload an M4A audio recording.')
+    # Reject unauthenticated or unsupported requests before accepting their
+    # body, keeping the raw-upload path as tightly bounded as the legacy one.
+    verified_firebase_user(request)
+    ensure_language(source_language)
+    audio = await request.body()
+    return await process_audio_bytes(
+        request, audio, source_language, 'recording.m4a', 'audio/mp4',
+    )

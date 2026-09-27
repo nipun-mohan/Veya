@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
@@ -56,14 +57,22 @@ class VeyaStore extends ChangeNotifier {
     final savedEndpoint = prefs.getString('endpoint');
     const builtEndpoint = String.fromEnvironment(
       'VEYA_API_URL',
-      defaultValue: 'https://veya-gateway-233466884801.asia-south1.run.app',
+      defaultValue: 'https://api.heyveya.app',
     );
     // Replace development-only LAN endpoints when the production app updates.
     // A release build may still override this endpoint with --dart-define.
     final normalizedSavedEndpoint = savedEndpoint?.trim() ?? '';
     final savedHost = Uri.tryParse(normalizedSavedEndpoint)?.host ?? '';
     final isDevelopmentEndpoint = savedHost.startsWith('192.168.');
-    endpoint = normalizedSavedEndpoint.isNotEmpty && !isDevelopmentEndpoint
+    // Move earlier public Cloud Run addresses behind the protected custom
+    // domain. Explicit custom endpoints remain untouched.
+    final isRetiredGateway =
+        savedHost == 'veya-gateway-233466884801.asia-south1.run.app' ||
+        savedHost == 'veya-gateway-iy75dfhiia-el.a.run.app';
+    endpoint =
+        normalizedSavedEndpoint.isNotEmpty &&
+            !isDevelopmentEndpoint &&
+            !isRetiredGateway
         ? normalizedSavedEndpoint
         : builtEndpoint;
     floatingIconScale = (prefs.getDouble('floatingIconScale') ?? 1)
@@ -97,6 +106,17 @@ class VeyaStore extends ChangeNotifier {
   }
 
   Future<void> syncNative() async {
+    // The accessibility service runs outside Flutter. Refresh the Firebase
+    // session whenever its configuration is sent so its next upload cannot
+    // be rejected after an otherwise normal token rotation.
+    final user = FirebaseAuth.instance.currentUser;
+    // The accessibility service keeps running while Flutter is backgrounded.
+    // Force a refresh when Veya is opened so its next recording never reuses
+    // an expired one-hour Firebase ID token.
+    final refreshedToken = user == null ? null : await user.getIdToken(true);
+    if (refreshedToken != null && refreshedToken.isNotEmpty) {
+      await secure.write(key: 'veya_firebase_id_token', value: refreshedToken);
+    }
     await AndroidBridge.call('configure', {
       'endpoint': endpoint,
       'language': language,
@@ -104,6 +124,10 @@ class VeyaStore extends ChangeNotifier {
       'allowedApps': allowedApps,
       'floatingIconScale': floatingIconScale,
       'floatingIconOpacity': floatingIconOpacity,
+      'firebaseIdToken':
+          refreshedToken ??
+          await secure.read(key: 'veya_firebase_id_token') ??
+          '',
     });
   }
 
