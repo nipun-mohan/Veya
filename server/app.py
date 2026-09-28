@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from server.costs import CloudBillingCosts
 from server.dashboard import DASHBOARD_HTML, GatewayMetrics, SUBSCRIPTIONS
 
 load_dotenv(Path(__file__).with_name('.env'))
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
         limits=httpx.Limits(max_connections=24, max_keepalive_connections=12),
     )
     app.state.metrics = GatewayMetrics()
+    app.state.cloud_costs = CloudBillingCosts()
     yield
     await app.state.sarvam_client.aclose()
 
@@ -507,6 +509,7 @@ def internal_overview(request: Request):
     return {
         **metrics,
         'health': health(),
+        'cloud_costs': request.app.state.cloud_costs.snapshot(),
         'subscriptions': [
             {'icon': icon, 'name': name, 'purpose': purpose, 'cost_status': status}
             for icon, name, purpose, status in SUBSCRIPTIONS

@@ -58,3 +58,9 @@ The dashboard deliberately does not estimate costs. For accurate costs, enable
 Cloud Billing export to BigQuery and connect a Sarvam usage or invoice feed.
 Cloud Run may run more than one instance, so aggregate traffic belongs in Cloud
 Monitoring for a full production-wide view.
+
+To show Google Cloud costs, enable the billing account's **Standard usage cost**
+export to a BigQuery dataset and set `VEYA_BILLING_DATASET` to that dataset's
+name. The export is daily, so the first table can take around 24 hours to
+appear. The Cloud Run runtime needs BigQuery Data Viewer on that dataset and
+BigQuery Job User on the project.

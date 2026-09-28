@@ -13,7 +13,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 10001 veya
-COPY --chown=veya:veya app.py dashboard.py ./server/
+COPY --chown=veya:veya app.py dashboard.py costs.py ./server/
 
 USER veya
 EXPOSE 8080
