@@ -508,8 +508,8 @@ def internal_overview(request: Request):
         **metrics,
         'health': health(),
         'subscriptions': [
-            {'name': name, 'purpose': purpose, 'cost_status': status}
-            for name, purpose, status in SUBSCRIPTIONS
+            {'icon': icon, 'name': name, 'purpose': purpose, 'cost_status': status}
+            for icon, name, purpose, status in SUBSCRIPTIONS
         ],
     }
 
