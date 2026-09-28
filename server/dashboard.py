@@ -14,6 +14,13 @@ class GatewayMetrics:
     http_events: deque[tuple[float, bool]] = field(default_factory=lambda: deque(maxlen=5000))
     stream_events: deque[tuple[float, str]] = field(default_factory=lambda: deque(maxlen=2000))
     active_streams: int = 0
+    # Sarvam does not currently expose a server-to-server billing endpoint.
+    # These figures are calculated from the work this gateway sends and are
+    # deliberately labelled estimates in the dashboard.
+    sarvam_stt_seconds: float = 0.0
+    sarvam_translation_characters: int = 0
+    sarvam_style_input_tokens: int = 0
+    sarvam_style_output_tokens: int = 0
 
     def record_http(self, route: str, status: int) -> None:
         self.routes[route] += 1
@@ -28,6 +35,18 @@ class GatewayMetrics:
         self.active_streams = max(0, self.active_streams - 1)
         self.stream_events.append((time.time(), outcome))
 
+    def record_sarvam_stt(self, seconds: float) -> None:
+        self.sarvam_stt_seconds += max(seconds, 0.0)
+
+    def record_sarvam_translation(self, characters: int) -> None:
+        self.sarvam_translation_characters += max(characters, 0)
+
+    def record_sarvam_style(self, prompt: str, output: str) -> None:
+        # Sarvam invoices LLM work by tokens. Four characters per token is a
+        # conservative, transparent estimate when no metering API is exposed.
+        self.sarvam_style_input_tokens += max(1, round(len(prompt) / 4))
+        self.sarvam_style_output_tokens += max(1, round(len(output) / 4))
+
     @staticmethod
     def _count(events: deque, seconds: int, kind: str | None = None) -> int:
         since = time.time() - seconds
@@ -38,6 +57,12 @@ class GatewayMetrics:
     def snapshot(self) -> dict[str, object]:
         now = time.time()
         five_minutes = [failed for stamp, failed in self.http_events if stamp >= now - 300]
+        stt_cost = self.sarvam_stt_seconds / 3600 * 30
+        translation_cost = self.sarvam_translation_characters / 10_000 * 20
+        style_cost = (
+            self.sarvam_style_input_tokens / 1_000_000 * 29.28
+            + self.sarvam_style_output_tokens / 1_000_000 * 73.2
+        )
         return {
             'started_at': int(self.started_at),
             'uptime_seconds': int(now - self.started_at),
@@ -52,6 +77,18 @@ class GatewayMetrics:
             },
             'routes': self.routes.most_common(12),
             'status_codes': dict(self.statuses),
+            'sarvam_costs': {
+                'currency': 'INR',
+                'estimated_total': round(stt_cost + translation_cost + style_cost, 4),
+                'stt_seconds': round(self.sarvam_stt_seconds, 1),
+                'translation_characters': self.sarvam_translation_characters,
+                'style_input_tokens': self.sarvam_style_input_tokens,
+                'style_output_tokens': self.sarvam_style_output_tokens,
+                'stt_cost': round(stt_cost, 4),
+                'translation_cost': round(translation_cost, 4),
+                'style_cost': round(style_cost, 4),
+                'message': 'Estimate for this Cloud Run instance since its last restart. Sarvam dashboard remains the source of truth for credits and invoices.',
+            },
         }
 
 
@@ -60,8 +97,8 @@ SUBSCRIPTIONS = [
     ('database', 'Cloud SQL', 'veya-users-db · PostgreSQL', 'Cloud Billing connected — awaiting first daily export'),
     ('dns', 'Google Cloud DNS', 'heyveya.app DNS zone', 'Cloud Billing connected — awaiting first daily export'),
     ('domain', 'Google Cloud Domains', 'heyveya.app registration', 'Cloud Billing connected — awaiting first daily export'),
-    ('auth', 'Firebase Authentication', 'Phone OTP and app identity', 'Usage billed where applicable — Firebase usage feed not connected'),
-    ('sarvam', 'Sarvam AI', 'Saaras, Translate, and 105B', 'Usage billed — Sarvam usage feed not connected'),
+    ('auth', 'Firebase Authentication', 'Phone OTP and app identity', 'Google Cloud Billing export connected — billed Firebase SKUs appear when exported'),
+    ('sarvam', 'Sarvam AI', 'Saaras, Translate, and 105B', 'Live Veya-side usage and cost estimate connected'),
     ('workspace', 'Google Workspace', 'heyveya.app verified', 'Gmail not activated'),
 ]
 
@@ -80,7 +117,8 @@ function icon(k){return({run:'cloud',database:'database',dns:'dns',domain:'domai
 function service(x){return `<article class="service"><div class="service-mark">${symbol(icon(x.icon))}</div><div><div class="name">${x.name}</div><div class="detail">${x.purpose}</div><div class="detail">${x.cost_status}</div></div></article>`}
 function money(value,currency){return new Intl.NumberFormat('en-IN',{style:'currency',currency:currency||'INR',maximumFractionDigits:2}).format(value||0)}
 function costPanel(cost){if(cost.status!=='available')return `<div class="card"><div class="label">Google Cloud cost</div><div class="name" style="margin-top:9px">${cost.status==='collecting'?'Collecting first export':'Not available'}</div><div class="detail">${cost.message}</div></div>`;return `<div class="card"><div class="label">Google Cloud cost · month to date</div><div class="value">${money(cost.month_to_date,cost.currency)}</div><div class="detail">${cost.message}</div></div><div class="card"><ul class="list">${cost.services.length?cost.services.slice(0,6).map(x=>row('payments',x.name,money(x.amount,x.currency))).join(''):row('payments','No billable usage yet','The export has no current-month line items.')}</ul></div>`}
-function render(d){let t=d.traffic,c=d.cloud_costs;$('content').innerHTML=`<div class="grid"><div class="card"><div class="label">Requests · 5 min</div><div class="value">${t.requests_5m}</div></div><div class="card"><div class="label">Errors · 5 min</div><div class="value">${t.errors_5m}</div></div><div class="card"><div class="label">Active streams</div><div class="value">${t.active_streams}</div></div><div class="card"><div class="label">Completed · 1 hr</div><div class="value">${t.completed_streams_1h}</div></div></div><div class="section">Google Cloud cost</div><div class="wide">${costPanel(c)}</div><div class="section">Service health</div><div class="wide"><div class="card"><ul class="list">${row('monitor_heart','Gateway',d.health.ok?'Healthy':'Unavailable')}${row('mic','Transcription',d.health.saaras_transcription_model)}${row('translate','Translation',d.health.translation_model)}${row('edit_note','Style generation',d.health.style_model)}${row('timer','Last process',d.health.last_process_duration_ms?d.health.last_process_duration_ms+' ms':'No legacy request yet')}</ul></div><div class="card"><ul class="list">${row('query_stats','Requests · 1 hour',t.requests_1h)}${row('stream','Streams opened · 1 hour',t.streams_1h)}${row('error','Streams failed · 1 hour',t.failed_streams_1h)}${row('schedule','Instance uptime',Math.floor(d.uptime_seconds/60)+' min')}</ul></div></div><div class="section">Subscriptions and cost visibility</div><div class="services">${d.subscriptions.map(service).join('')}</div><div class="section">Top routes on this instance</div><div class="card"><ul class="list">${d.routes.length?d.routes.map(x=>row('route',x[0],x[1]+' requests')).join(''):row('route','No traffic recorded','This instance has not received a tracked HTTP request yet.')}</ul></div>`}
+function sarvamPanel(s){return `<div class="card"><div class="label">Sarvam estimate · this instance</div><div class="value">${money(s.estimated_total,s.currency)}</div><div class="detail">${s.message}</div></div><div class="card"><ul class="list">${row('mic',Math.round(s.stt_seconds)+' sec transcription',money(s.stt_cost,s.currency))}${row('translate',s.translation_characters.toLocaleString()+' translated characters',money(s.translation_cost,s.currency))}${row('edit_note',(s.style_input_tokens+s.style_output_tokens).toLocaleString()+' style tokens (estimated)',money(s.style_cost,s.currency))}</ul></div>`}
+function render(d){let t=d.traffic,c=d.cloud_costs,s=d.sarvam_costs;$('content').innerHTML=`<div class="grid"><div class="card"><div class="label">Requests · 5 min</div><div class="value">${t.requests_5m}</div></div><div class="card"><div class="label">Errors · 5 min</div><div class="value">${t.errors_5m}</div></div><div class="card"><div class="label">Active streams</div><div class="value">${t.active_streams}</div></div><div class="card"><div class="label">Completed · 1 hr</div><div class="value">${t.completed_streams_1h}</div></div></div><div class="section">Google Cloud cost</div><div class="wide">${costPanel(c)}</div><div class="section">Sarvam usage and cost</div><div class="wide">${sarvamPanel(s)}</div><div class="section">Service health</div><div class="wide"><div class="card"><ul class="list">${row('monitor_heart','Gateway',d.health.ok?'Healthy':'Unavailable')}${row('mic','Transcription',d.health.saaras_transcription_model)}${row('translate','Translation',d.health.translation_model)}${row('edit_note','Style generation',d.health.style_model)}${row('timer','Last process',d.health.last_process_duration_ms?d.health.last_process_duration_ms+' ms':'No legacy request yet')}</ul></div><div class="card"><ul class="list">${row('query_stats','Requests · 1 hour',t.requests_1h)}${row('stream','Streams opened · 1 hour',t.streams_1h)}${row('error','Streams failed · 1 hour',t.failed_streams_1h)}${row('schedule','Instance uptime',Math.floor(d.uptime_seconds/60)+' min')}</ul></div></div><div class="section">Subscriptions and cost visibility</div><div class="services">${d.subscriptions.map(service).join('')}</div><div class="section">Top routes on this instance</div><div class="card"><ul class="list">${d.routes.length?d.routes.map(x=>row('route',x[0],x[1]+' requests')).join(''):row('route','No traffic recorded','This instance has not received a tracked HTTP request yet.')}</ul></div>`}
 async function refresh(){const button=$('refresh-button');button?.classList.add('loading');try{render(await load())}catch(e){sessionStorage.removeItem('veya_admin_token');$('app').classList.add('hidden');$('login').classList.remove('hidden');$('error').textContent=e.message}finally{button?.classList.remove('loading')}}
 async function login(){token=$('token').value;try{await load();sessionStorage.setItem('veya_admin_token',token);$('login').classList.add('hidden');$('app').classList.remove('hidden');refresh()}catch(e){$('error').textContent=e.message}}
 if(token){$('login').classList.add('hidden');$('app').classList.remove('hidden');refresh()}

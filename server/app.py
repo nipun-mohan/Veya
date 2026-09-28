@@ -291,7 +291,10 @@ async def sarvam_translate(
     if response.status_code >= 300:
         raise gateway_error('Sarvam translation', response)
     try:
-        return str(response.json()['translated_text']).strip()
+        translated = str(response.json()['translated_text']).strip()
+        # Translate is billed by input characters. Count only successful calls.
+        app.state.metrics.record_sarvam_translation(len(text))
+        return translated
     except (KeyError, TypeError, ValueError):
         raise HTTPException(502, 'Sarvam returned an invalid translation response.')
 
@@ -442,6 +445,7 @@ async def sarvam_deferred_styles(
         }
         if not all(styles.values()):
             raise ValueError('empty style output')
+        app.state.metrics.record_sarvam_style(prompt, f"{styles['casual']}\n{styles['formal']}")
         return styles
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
         print(f'Veya deferred styles parsing failed: {error!r}', flush=True)
@@ -727,6 +731,7 @@ async def stream_audio(websocket: WebSocket):
     sarvam_url = f'wss://api.sarvam.ai/speech-to-text-realtime/ws?{query}'
     client_finished = asyncio.Event()
     final_parts: list[str] = []
+    audio_bytes_sent = 0
 
     try:
         async with websockets.connect(
@@ -738,7 +743,7 @@ async def stream_audio(websocket: WebSocket):
             await sarvam.send(json.dumps({'event': 'speech_start'}))
 
             async def forward_audio() -> None:
-                nonlocal stream_outcome
+                nonlocal stream_outcome, audio_bytes_sent
                 while True:
                     message = json.loads(await websocket.receive_text())
                     event = message.get('event')
@@ -746,6 +751,9 @@ async def stream_audio(websocket: WebSocket):
                         audio = message.get('audio', '')
                         if not isinstance(audio, str) or len(audio) > 18000:
                             raise ValueError('Invalid audio frame.')
+                        # 16 kHz, 16-bit mono PCM: 32,000 bytes per second.
+                        # Base64 padding is excluded from the byte estimate.
+                        audio_bytes_sent += len(audio.rstrip('=')) * 3 // 4
                         await sarvam.send(json.dumps({'event': 'audio_input', 'audio': audio}))
                     elif event == 'finish':
                         client_finished.set()
@@ -819,6 +827,7 @@ async def stream_audio(websocket: WebSocket):
     finally:
         if stream_started:
             websocket.app.state.metrics.stream_finished(stream_outcome)
+            websocket.app.state.metrics.record_sarvam_stt(audio_bytes_sent / 32_000)
         try:
             await websocket.close()
         except Exception:
