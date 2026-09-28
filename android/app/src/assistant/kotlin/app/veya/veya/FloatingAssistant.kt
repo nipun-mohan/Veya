@@ -35,7 +35,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 class FloatingAssistant : AccessibilityService(), SensorEventListener {
- companion object { var instance: FloatingAssistant? = null }
+ companion object {
+  var instance: FloatingAssistant? = null
+  private const val SILENCE_TIMEOUT_MS = 20_000L
+  private const val VOICE_ACTIVITY_THRESHOLD = 900
+ }
  private val main = Handler(Looper.getMainLooper())
  private val worker = Executors.newSingleThreadExecutor()
  private val httpClient by lazy {
@@ -64,6 +68,8 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private val streamWorker = Executors.newSingleThreadExecutor()
  private var recordingFile: File? = null
  @Volatile private var recordingAmplitude=0
+ @Volatile private var lastSpeechAt = 0L
+ @Volatile private var heardSpeech = false
  // Read by the PCM worker and written on the accessibility/main thread. A
  // foreground-app change must stop audio delivery before another frame can be
  // sent to the streaming gateway.
@@ -89,6 +95,24 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    if (state != "recording") return
    recordingAmplitude = runCatching { recorder?.maxAmplitude ?: recordingAmplitude }.getOrDefault(recordingAmplitude)
    main.postDelayed(this, 60)
+  }
+ }
+ private val silenceWatcher = object : Runnable {
+  override fun run() {
+   if (state != "recording") return
+   if (SystemClock.elapsedRealtime() - lastSpeechAt >= SILENCE_TIMEOUT_MS) {
+    Log.i("VeyaAssistant", "Ending realtime stream after $SILENCE_TIMEOUT_MS ms of silence")
+    if (heardSpeech) {
+     // Preserve what the user dictated and ask Sarvam to finalize it.
+     finishRecording()
+    } else {
+     // Never show a failed-processing state for an untouched microphone.
+     cancel()
+     bubble()
+    }
+    return
+   }
+   main.postDelayed(this, 1_000)
   }
  }
  private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -498,13 +522,14 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    if(active) postInvalidateDelayed(45)
   }
  }
- private fun cancel() {
+private fun cancel() {
   requestId++
-  main.removeCallbacks(amplitudeTicker)
+  main.removeCallbacks(amplitudeTicker); main.removeCallbacks(silenceWatcher)
   streamSocket?.send(JSONObject().put("event", "cancel").toString())
   streamSocket?.close(1000, "cancelled"); streamSocket=null
   streamRecorder?.let { runCatching { it.stop() }; it.release() }; streamRecorder=null
-  recorder?.let { runCatching { it.stop() }; it.release() }; recorder=null; recordingFile?.delete(); recordingFile=null; recordingAmplitude=0; state="idle"
+  recorder?.let { runCatching { it.stop() }; it.release() }; recorder=null; recordingFile?.delete(); recordingFile=null
+  recordingAmplitude=0; lastSpeechAt=0L; heardSpeech=false; state="idle"
  }
  private fun startRecording() {
   if(state!="idle") return
@@ -523,8 +548,10 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    // Set the state before the asynchronous WebSocket can open.  Previously a
    // quick connection could observe "idle" in onOpen and cancel itself.
    state="recording"
+   lastSpeechAt=SystemClock.elapsedRealtime()
+   heardSpeech=false
    startSarvamStream(requestId)
-   recorderControls(); main.post(amplitudeTicker)
+   recorderControls(); main.post(amplitudeTicker); main.postDelayed(silenceWatcher,1_000)
   } catch(e: Exception) { Log.e("VeyaAssistant", "Floating recorder startup failed", e); cancel(); failure("Could not start recording. Open Veya once, then try again.") }
  }
 
@@ -574,6 +601,10 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
        peak=max(peak, abs(sample.toShort().toInt())); index += 2
       }
       recordingAmplitude=peak
+      if (peak >= VOICE_ACTIVITY_THRESHOLD) {
+       heardSpeech=true
+       lastSpeechAt=SystemClock.elapsedRealtime()
+      }
       val encoded=android.util.Base64.encodeToString(
        chunk.copyOf(count), android.util.Base64.NO_WRAP,
       )
@@ -706,8 +737,8 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   }
  }
  private fun finishRecording() {
-  if(state!="recording") return
-  main.removeCallbacks(amplitudeTicker)
+ if(state!="recording") return
+  main.removeCallbacks(amplitudeTicker); main.removeCallbacks(silenceWatcher)
   streamRecorder?.let { runCatching { it.stop() }; it.release() }; streamRecorder=null
   recordingAmplitude=0
   state="generating"
