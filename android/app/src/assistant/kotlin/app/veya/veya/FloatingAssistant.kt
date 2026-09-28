@@ -64,7 +64,10 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private val streamWorker = Executors.newSingleThreadExecutor()
  private var recordingFile: File? = null
  @Volatile private var recordingAmplitude=0
- private var state = "idle"
+ // Read by the PCM worker and written on the accessibility/main thread. A
+ // foreground-app change must stop audio delivery before another frame can be
+ // sent to the streaming gateway.
+ @Volatile private var state = "idle"
  private var hidden = false
  private var targetPackage = ""
  private var requestId = 0
@@ -117,7 +120,35 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    }, 350)
   }
  }
- override fun onAccessibilityEvent(event: AccessibilityEvent?) { refresh() }
+ override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+  // rootInActiveWindow is null while the current app is closing or Android is
+  // switching to the launcher. The former refresh-only implementation returned
+  // in that case, leaving a live microphone and WebSocket behind. Wait for the
+  // window switch to settle, then stop an active recording unless the original
+  // target is still the foreground app.
+  if (
+   state == "recording" && targetPackage.isNotBlank() &&
+   event?.eventType in setOf(
+    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+    AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+   )
+  ) {
+   val eventPackage = event?.packageName?.toString()
+   if (eventPackage != targetPackage && eventPackage != packageName) {
+    main.postDelayed({
+     if (state != "recording") return@postDelayed
+     val foregroundPackage = rootInActiveWindow?.packageName?.toString()
+     if (foregroundPackage == null || foregroundPackage != targetPackage) {
+      Log.i("VeyaAssistant", "Stopping recording after target app left foreground: $foregroundPackage")
+      cancel()
+      remove()
+      targetPackage = ""
+     }
+    }, 120)
+   }
+  }
+  refresh()
+ }
  override fun onInterrupt() { cancel(); remove() }
  override fun onDestroy() {
   sensor?.unregisterListener(this); cancel(); remove(); worker.shutdownNow(); streamWorker.shutdownNow(); instance = null
