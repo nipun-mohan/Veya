@@ -175,6 +175,16 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   val allowed = prefs.getStringSet("allowedApps", emptySet())!!.contains(pkg)
   val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
   if (!allowed || focus?.isPassword == true || focus?.isEditable != true) {
+   // A back press can leave a WhatsApp chat for its conversation list without
+   // changing the package name. There is no longer a message field to serve,
+   // so do not leave microphone capture or the realtime stream running.
+   if (state == "recording") {
+    Log.i("VeyaAssistant", "Stopping recording because the target message field is gone")
+    cancel()
+    remove()
+    targetPackage = ""
+    return
+   }
    if (pkg != packageName) { cancel(); remove() }
    return
   }
