@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.graphics.*
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioFormat
+import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import android.hardware.*
@@ -25,6 +27,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
@@ -39,11 +44,24 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    .readTimeout(90, TimeUnit.SECONDS)
    .build()
  }
+ private val streamClient by lazy {
+  // A long dictation can legitimately outlive the REST timeout. Keep the
+  // realtime channel alive until Sarvam emits its explicit final response.
+  OkHttpClient.Builder()
+   .connectTimeout(15, TimeUnit.SECONDS)
+   .readTimeout(0, TimeUnit.MILLISECONDS)
+   .pingInterval(20, TimeUnit.SECONDS)
+   .build()
+ }
  private val prefs by lazy { getSharedPreferences("assistant", MODE_PRIVATE) }
  private val wm by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
  private var panel: LinearLayout? = null
  private var params: WindowManager.LayoutParams? = null
  private var recorder: MediaRecorder? = null
+ private var streamRecorder: AudioRecord? = null
+ private var streamSocket: WebSocket? = null
+ private var streamRequestId = 0
+ private val streamWorker = Executors.newSingleThreadExecutor()
  private var recordingFile: File? = null
  @Volatile private var recordingAmplitude=0
  private var state = "idle"
@@ -66,7 +84,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private val amplitudeTicker = object : Runnable {
   override fun run() {
    if (state != "recording") return
-   recordingAmplitude = runCatching { recorder?.maxAmplitude ?: 0 }.getOrDefault(0)
+   recordingAmplitude = runCatching { recorder?.maxAmplitude ?: recordingAmplitude }.getOrDefault(recordingAmplitude)
    main.postDelayed(this, 60)
   }
  }
@@ -102,7 +120,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  override fun onAccessibilityEvent(event: AccessibilityEvent?) { refresh() }
  override fun onInterrupt() { cancel(); remove() }
  override fun onDestroy() {
-  sensor?.unregisterListener(this); cancel(); remove(); worker.shutdownNow(); instance = null
+  sensor?.unregisterListener(this); cancel(); remove(); worker.shutdownNow(); streamWorker.shutdownNow(); instance = null
   if (prefs.getBoolean("returnToVeyaAfterDisable", false)) {
    prefs.edit().remove("returnToVeyaAfterDisable").apply()
    main.postDelayed({
@@ -147,12 +165,12 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  ).apply {
   cornerRadius = dp(20).toFloat()
  }
- private fun text(value: String, size: Float = 16f) = TextView(this).apply {
+ private fun text(value: String, size: Float = 14f) = TextView(this).apply {
   text = value; textSize = size; setTextColor(lime); gravity = Gravity.CENTER; setPadding(dp(12), dp(10), dp(12), dp(10))
  }
  private fun button(value: String, action: () -> Unit) = text(value).apply { setOnClickListener { action() } }
  private fun circle(value:String, fillColor:Int, textColor:Int, action:()->Unit) = TextView(this).apply {
-  text=value; textSize=26f; setTextColor(textColor); gravity=Gravity.CENTER
+  text=value; textSize=23f; setTextColor(textColor); gravity=Gravity.CENTER
   background=GradientDrawable().apply { setColor(fillColor); shape=GradientDrawable.OVAL }
   setOnClickListener { haptic(); action() }
  }
@@ -177,7 +195,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private fun showHideTarget() {
   if(hideTarget!=null || state!="idle") return
   val target=TextView(this).apply {
-   text="↓  Hide"; textSize=14f; gravity=Gravity.CENTER; setTextColor(Color.WHITE); setTypeface(null,Typeface.BOLD)
+   text="↓  Hide"; textSize=13f; gravity=Gravity.CENTER; setTextColor(Color.WHITE); setTypeface(null,Typeface.BOLD)
    background=GradientDrawable().apply { setColor(Color.argb(224,23,63,56)); cornerRadius=dp(26).toFloat() }
   }
   val lp=WindowManager.LayoutParams(dp(126),dp(52),WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -442,6 +460,9 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private fun cancel() {
   requestId++
   main.removeCallbacks(amplitudeTicker)
+  streamSocket?.send(JSONObject().put("event", "cancel").toString())
+  streamSocket?.close(1000, "cancelled"); streamSocket=null
+  streamRecorder?.let { runCatching { it.stop() }; it.release() }; streamRecorder=null
   recorder?.let { runCatching { it.stop() }; it.release() }; recorder=null; recordingFile?.delete(); recordingFile=null; recordingAmplitude=0; state="idle"
  }
  private fun startRecording() {
@@ -458,19 +479,106 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   try {
    if(prefs.getString("endpoint", "").isNullOrBlank()) error("Set the translation service in Veya Settings.")
    ++requestId
-   recordingFile=File(cacheDir,"veya-${System.currentTimeMillis()}.m4a")
-   recorder=MediaRecorder().apply {
-    setAudioSource(MediaRecorder.AudioSource.MIC)
-    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-    setAudioSamplingRate(16000)
-    setAudioEncodingBitRate(24000)
-    setOutputFile(recordingFile!!.absolutePath)
-    prepare()
-    start()
-   }
-   state="recording"; recorderControls(); main.post(amplitudeTicker)
+   // Set the state before the asynchronous WebSocket can open.  Previously a
+   // quick connection could observe "idle" in onOpen and cancel itself.
+   state="recording"
+   startSarvamStream(requestId)
+   recorderControls(); main.post(amplitudeTicker)
   } catch(e: Exception) { Log.e("VeyaAssistant", "Floating recorder startup failed", e); cancel(); failure("Could not start recording. Open Veya once, then try again.") }
+ }
+
+ private fun startSarvamStream(id: Int) {
+  val endpoint=prefs.getString("endpoint", "")!!.trimEnd('/')
+  val language=prefs.getString("language","en-IN")!!
+  val streamEndpoint=when {
+   endpoint.startsWith("https://") -> "wss://${endpoint.removePrefix("https://")}"
+   endpoint.startsWith("http://") -> "ws://${endpoint.removePrefix("http://")}"
+   else -> endpoint
+  }
+  val bufferSize=AudioRecord.getMinBufferSize(
+   16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+  ).coerceAtLeast(3200)
+  streamRecorder=AudioRecord(
+   MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO,
+   AudioFormat.ENCODING_PCM_16BIT, bufferSize * 2,
+  )
+  if(streamRecorder?.state != AudioRecord.STATE_INITIALIZED) error("Could not start the microphone.")
+  streamRequestId=id
+  val request=Request.Builder()
+   .url("$streamEndpoint/stream?source_language=${java.net.URLEncoder.encode(language, "UTF-8")}")
+   // Accessibility services can outlive the token cached by Flutter. Refresh
+   // it before opening the long-lived authenticated stream.
+   .apply { activeFirebaseToken(forceRefresh=true)?.let { header("Authorization", "Bearer $it") } }
+   .build()
+  streamSocket=streamClient.newWebSocket(request, object : WebSocketListener() {
+   override fun onOpen(socket: WebSocket, response: Response) {
+    if(id != streamRequestId || state != "recording") {
+     socket.send(JSONObject().put("event", "cancel").toString()); socket.close(1000,"cancelled"); return
+    }
+    val audio=streamRecorder ?: return
+    runCatching { audio.startRecording() }.onFailure { error ->
+     Log.e("VeyaAssistant", "PCM recorder startup failed", error)
+     main.post { if(id == streamRequestId) { cancel(); failure("Could not start the microphone.") } }
+     return
+    }
+    streamWorker.execute {
+     val chunk=ByteArray(3200) // 100 ms of mono linear16 at 16 kHz.
+     while(state == "recording" && id == streamRequestId && streamRecorder === audio) {
+      val count=audio.read(chunk,0,chunk.size)
+      if(count <= 0) continue
+      var peak=0
+      var index=0
+      while(index + 1 < count) {
+       val sample=((chunk[index].toInt() and 0xff) or (chunk[index + 1].toInt() shl 8))
+       peak=max(peak, abs(sample.toShort().toInt())); index += 2
+      }
+      recordingAmplitude=peak
+      val encoded=android.util.Base64.encodeToString(
+       chunk.copyOf(count), android.util.Base64.NO_WRAP,
+      )
+      if(!socket.send(JSONObject().put("event", "audio").put("audio", encoded).toString())) break
+     }
+    }
+   }
+   override fun onMessage(socket: WebSocket, text: String) {
+    val data=runCatching { JSONObject(text) }.getOrNull() ?: return
+    when(data.optString("type")) {
+     "partial" -> Log.d("VeyaAssistant", "Sarvam partial: ${data.optString("text")}")
+     "result" -> main.post {
+      if(id == streamRequestId) { streamSocket=null; results(data) }
+     }
+     "error" -> main.post {
+      if(id == streamRequestId) { streamSocket=null; failure(data.optString("message", "We couldn't process that recording. Please try again.")) }
+     }
+    }
+   }
+   override fun onFailure(socket: WebSocket, throwable: Throwable, response: Response?) {
+    Log.e("VeyaAssistant", "Sarvam stream failed", throwable)
+    main.post {
+     if(id == streamRequestId && state != "idle") {
+      streamSocket=null
+      failure("We couldn't process that recording. Please try again.")
+     }
+    }
+   }
+   override fun onClosing(socket: WebSocket, code: Int, reason: String) {
+    socket.close(code, reason)
+    main.post {
+     if(id == streamRequestId && state == "generating") {
+      streamSocket=null
+      failure("The transcription stream closed before completing. Please try again.")
+     }
+    }
+   }
+   override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+    main.post {
+     if(id == streamRequestId && state == "generating") {
+      streamSocket=null
+      failure("The transcription stream closed before completing. Please try again.")
+     }
+    }
+   }
+  })
  }
  private fun recorderControls() {
   remove()
@@ -558,16 +666,12 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  }
  private fun finishRecording() {
   if(state!="recording") return
-  val id=requestId
-  val file=recordingFile
   main.removeCallbacks(amplitudeTicker)
-  val stopped=runCatching { recorder?.stop() }.isSuccess
-  recorder?.release(); recorder=null
+  streamRecorder?.let { runCatching { it.stop() }; it.release() }; streamRecorder=null
   recordingAmplitude=0
   state="generating"
   generatingControls()
-  if (!stopped || file == null || file.length() < 512L) { file?.delete(); recordingFile=null; bubble(); return }
-  worker.execute { processRecording(id,file) }
+  streamSocket?.send(JSONObject().put("event", "finish").toString())
  }
  private fun processRecording(id:Int, file:File) {
   try {
@@ -620,20 +724,20 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   return refreshed ?: prefs.getString("firebaseIdToken","")?.takeIf { it.isNotBlank() }
  }
  private fun postJson(url: String, body: JSONObject): JSONObject {
-  val payload = android.util.Base64.encodeToString(
-   body.toString().toByteArray(Charsets.UTF_8),
-   android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING,
-  )
-  val requestBuilder = Request.Builder().url(url)
-   .post(payload.toRequestBody("application/octet-stream".toMediaType()))
-  if (url.endsWith("/styles")) {
-   requestBuilder.url(url.removeSuffix("/styles") + "/styles-raw")
+  // Style text is safe JSON. The normal endpoint avoids edge WAF rejection of
+  // opaque payloads before they reach the authenticated Cloud Run service.
+  fun requestFor(token: String?) = Request.Builder().url(url)
+   .post(body.toString().toRequestBody("application/json".toMediaType()))
+   .apply { token?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Bearer $it") } }
+   .build()
+  // Style generation runs after the result panel opens, so its cached Firebase
+  // token can be stale even when the recording stream was authenticated.
+  var response=httpClient.newCall(requestFor(activeFirebaseToken())).execute()
+  if(response.code==401 || response.code==403) {
+   response.close()
+   response=httpClient.newCall(requestFor(activeFirebaseToken(forceRefresh=true))).execute()
   }
-  prefs.getString("firebaseIdToken", "")?.takeIf { it.isNotBlank() }?.let {
-   requestBuilder.header("Authorization", "Bearer $it")
-  }
-  val request = requestBuilder.build()
-  httpClient.newCall(request).execute().use { response ->
+  response.use { response ->
    val raw = response.body?.string().orEmpty()
    if (!response.isSuccessful) error("Style request failed (${response.code}).")
    return JSONObject(raw)
@@ -694,7 +798,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
     setStroke(dp(1),stroke)
    }
    val content=TextView(this).apply {
-    text=selected; textSize=14f; gravity=Gravity.START; setTextColor(Color.rgb(246,246,242)); setTypeface(null,Typeface.NORMAL)
+    text=selected; textSize=13f; gravity=Gravity.START; setTextColor(Color.rgb(246,246,242)); setTypeface(null,Typeface.NORMAL)
     setLineSpacing(dp(3).toFloat(),1f); setPadding(dp(12),dp(11),dp(42),dp(10))
    }
    val resultScroller=ScrollView(this).apply {
@@ -723,7 +827,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    // Keep the close affordance inside the reader itself.  It is a text glyph,
    // not an outlined chip, so it remains crisp on every overlay background.
    val close=TextView(this).apply {
-    text="×"; textSize=30f; gravity=Gravity.CENTER
+    text="×"; textSize=27f; gravity=Gravity.CENTER
     setTextColor(Color.rgb(255,250,244)); setTypeface(null,Typeface.BOLD)
     contentDescription="Close"
     elevation=dp(12).toFloat()
@@ -763,7 +867,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
      val icon=StyleGlyph(item.first,language.second)
      val iconShell=FrameLayout(this).apply { foregroundGravity=Gravity.CENTER }
      iconShell.addView(icon,FrameLayout.LayoutParams(dp(30),dp(30),Gravity.CENTER))
-     val label=TextView(this).apply { text=item.second; textSize=10f; gravity=Gravity.CENTER; isSingleLine=true; setTypeface(null,Typeface.BOLD) }
+     val label=TextView(this).apply { text=item.second; textSize=9f; gravity=Gravity.CENTER; isSingleLine=true; setTypeface(null,Typeface.BOLD) }
      body.addView(iconShell,LinearLayout.LayoutParams(dp(42),dp(38)).apply {
       gravity=Gravity.CENTER_HORIZONTAL; topMargin=dp(3); bottomMargin=dp(3)
      })
@@ -829,7 +933,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    footer.addView(copy,LinearLayout.LayoutParams(dp(28),dp(28)))
    footer.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
    val insert=TextView(this).apply {
-    text="Insert"; textSize=14f; gravity=Gravity.CENTER; setTextColor(Color.rgb(26,20,9)); setTypeface(null,Typeface.BOLD)
+    text="Insert"; textSize=13f; gravity=Gravity.CENTER; setTextColor(Color.rgb(26,20,9)); setTypeface(null,Typeface.BOLD)
     // Keep the action and the active style state on the one Mango accent.
     background=rounded(mango,25); setOnClickListener { haptic(); insert(selected) }
    }
@@ -839,27 +943,8 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
    viewer.addView(footer,FrameLayout.LayoutParams(-1,dp(36),Gravity.BOTTOM).apply {
     leftMargin=dp(8); rightMargin=dp(8); bottomMargin=dp(4)
    })
-   // Casual is shown as soon as Sarvam returns it. The slower two style
-   // rewrites arrive independently and update their tabs without blocking
-   // the result sheet or the Insert action.
-   worker.execute {
-    try {
-     val endpoint=prefs.getString("endpoint","")!!.trimEnd('/')
-     val deferred=postJson("$endpoint/styles",JSONObject()
-      .put("original_text",original).put("english_text",data.optString("english_text"))
-      .put("source_language",sourceCode))
-     val deferredStyles=deferred.optJSONObject("styles") ?: JSONObject()
-     main.post {
-      if(state!="results" || requestId!=resultRequest) return@post
-      listOf("formal").forEach { key ->
-       val value=deferredStyles.optString(key).trim()
-       val index=pages.indexOfFirst { it.first==key }
-       if(value.isNotEmpty() && index>=0) pages[index]=Triple(key,pages[index].second,value)
-      }
-      if(selectedKey=="formal") refreshPage()
-     }
-    } catch(e:Exception) { Log.w("VeyaAssistant","Deferred styles failed",e) }
-   }
+   // The streaming gateway already returns the final Casual and Formal
+   // rewrites together with the result. No second request is needed here.
   }
  }
  private fun insert(value:String) {

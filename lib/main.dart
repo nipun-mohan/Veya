@@ -64,6 +64,17 @@ class VeyaApp extends StatelessWidget {
       title: 'Veya',
       debugShowCheckedModeBanner: false,
       theme: veyaTheme(),
+      // Keep the visual system compact and consistent across every Flutter
+      // screen while preserving the user's device accessibility setting.
+      builder: (context, child) {
+        final media = MediaQuery.of(context);
+        return MediaQuery(
+          data: media.copyWith(textScaler: TextScaler.linear(
+            media.textScaler.scale(1) * .90,
+          )),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       locale: Locale((current?.uiLanguage ?? 'en').split('-').first),
       supportedLocales: VeyaStrings.codes.map((code) => Locale(code)).toList(),
       localizationsDelegates: const [

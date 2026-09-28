@@ -147,9 +147,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           ),
         ),
       ),
-      const SizedBox(height: 28),
+      const SizedBox(height: 22),
       SizedBox(
-        height: 276,
+        height: 202,
         child: Stack(
           children: [
             const Positioned(
@@ -158,22 +158,22 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               child: LText(
                 'Think it.\nSay it.\nSend it.',
                 style: TextStyle(
-                  fontSize: 49,
+                  fontSize: 45,
                   height: .94,
                   fontWeight: FontWeight.w900,
                   letterSpacing: -3.1,
                 ),
               ),
             ),
-            const Positioned(right: 2, top: 20, child: _SpeechRibbons()),
+            const Positioned(right: 2, top: 10, child: _SpeechRibbons()),
             const Positioned(
               left: 0,
-              bottom: 2,
+              top: 140,
               child: LText(
                 'From your language\nto natural English.',
                 style: TextStyle(
-                  fontSize: 21,
-                  height: 1.16,
+                  fontSize: 17,
+                  height: 1.14,
                   color: VeyaColors.muted,
                   fontWeight: FontWeight.w500,
                 ),
@@ -183,14 +183,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         ),
       ),
       if (assistantEnabled) ...[
-        const SizedBox(height: 26),
+        const SizedBox(height: 16),
         _AssistantStatus(
           count: widget.store.allowedApps.length,
           onTap: _openApps,
         ),
         const SizedBox(height: 14),
       ] else
-        const SizedBox(height: 26),
+        const SizedBox(height: 16),
       const SurfaceCard(
         padding: EdgeInsets.fromLTRB(20, 15, 20, 12),
         child: Column(

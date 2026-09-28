@@ -10,10 +10,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+import websockets
 import firebase_admin
 from firebase_admin import auth as firebase_auth
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 load_dotenv(Path(__file__).with_name('.env'))
@@ -93,6 +94,21 @@ def verified_firebase_user(request: Request) -> dict[str, object]:
         return firebase_auth.verify_id_token(token, check_revoked=True)
     except Exception as error:
         print(f'Firebase token rejected: {error!r}', flush=True)
+        raise HTTPException(401, 'Your session has expired. Please verify your number again.')
+
+
+def verified_firebase_socket(websocket: WebSocket) -> dict[str, object]:
+    """Authenticate the mobile relay without exposing the Sarvam key."""
+    header = websocket.headers.get('authorization', '')
+    if not header.startswith('Bearer '):
+        raise HTTPException(401, 'Authentication is required.')
+    token = header.removeprefix('Bearer ').strip()
+    try:
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app()
+        return firebase_auth.verify_id_token(token, check_revoked=True)
+    except Exception as error:
+        print(f'Firebase streaming token rejected: {error!r}', flush=True)
         raise HTTPException(401, 'Your session has expired. Please verify your number again.')
 
 
@@ -382,10 +398,12 @@ async def sarvam_deferred_styles(
     if not english:
         english = await sarvam_translate(client, original, source_language)
     prompt = (
-        'Return JSON only with exactly one non-empty string key: formal. '
+        'Return JSON only with exactly two non-empty string keys: casual and formal. '
         f'The English meaning of the user message is: {english!r}. '
-        'formal MUST be natural English only. Preserve exact meaning and add no facts, names, greetings, sign-offs, labels, or explanations. '
-        'Make it polite and respectful.'
+        'Both values MUST preserve the exact meaning, names, numbers, and intent. '
+        'Do not add facts, labels, explanations, or sign-offs. '
+        'casual: rewrite as a warm, natural chat message. Use at most two small, context-appropriate emojis only when they improve a clearly friendly or informal message. Never add emojis to sensitive, urgent, financial, medical, legal, apologetic, or serious messages. '
+        'formal: rewrite as polished, professional, respectful English with complete sentences. Do not use emojis, slang, contractions, or casual filler.'
     )
     response = await client.post(
         f'{SARVAM_BASE_URL}/v1/chat/completions',
@@ -402,7 +420,10 @@ async def sarvam_deferred_styles(
         raise gateway_error('Sarvam deferred style generation', response)
     try:
         values = json.loads(response.json()['choices'][0]['message']['content'])
-        styles = {'formal': str(values['formal']).strip()}
+        styles = {
+            'casual': str(values['casual']).strip(),
+            'formal': str(values['formal']).strip(),
+        }
         if not all(styles.values()):
             raise ValueError('empty style output')
         return styles
@@ -412,22 +433,17 @@ async def sarvam_deferred_styles(
 
 
 async def create_response(client: httpx.AsyncClient, transcript: str, source_language: str) -> dict[str, object]:
-    if source_language == 'en-IN':
-        return {
-            'original_text': transcript,
-            'english_text': transcript,
-            'styles': {'casual': transcript},
-        }
-    # Mayura's modern-colloquial mode may return a Latin transliteration for
-    # some Indic inputs. Sarvam Translate consistently returns English here;
-    # use it for the first visible Casual tab and reuse it for Formal's
-    # background rewrite.
-    english = await sarvam_translate(client, transcript, source_language)
-    casual = english
+    # Produce both visible styles inside the authenticated recording request.
+    # A separate mobile /styles call is rejected by the edge WAF on some
+    # networks, which left the two tabs showing the same initial translation.
+    english = transcript if source_language == 'en-IN' else await sarvam_translate(
+        client, transcript, source_language,
+    )
+    styles = await sarvam_deferred_styles(client, transcript, english, source_language)
     return {
         'original_text': transcript,
         'english_text': english,
-        'styles': {'casual': casual},
+        'styles': styles,
     }
 
 
@@ -639,3 +655,118 @@ async def process_raw_audio(request: Request):
     return await process_audio_bytes(
         request, audio, source_language, 'recording.m4a', 'audio/mp4',
     )
+
+
+@app.websocket('/stream')
+async def stream_audio(websocket: WebSocket):
+    """Relay raw PCM from Veya to Sarvam's realtime STT WebSocket."""
+    await websocket.accept()
+    try:
+        verified_firebase_socket(websocket)
+        ensure_sarvam()
+        source_language = websocket.query_params.get('source_language', '')
+        ensure_language(source_language)
+    except HTTPException as error:
+        await websocket.send_json({'type': 'error', 'message': error.detail})
+        await websocket.close(code=4401)
+        return
+
+    params = {
+        'language_code': 'auto', 'model': SARVAM_STT_MODEL,
+        'mode': 'transcribe', 'stream_type': 'balanced',
+        'endpointing': 'manual', 'encoding': 'linear16', 'sample_rate': '16000',
+    }
+    query = '&'.join(f'{key}={value}' for key, value in params.items())
+    sarvam_url = f'wss://api.sarvam.ai/speech-to-text-realtime/ws?{query}'
+    client_finished = asyncio.Event()
+    final_parts: list[str] = []
+
+    try:
+        async with websockets.connect(
+            sarvam_url,
+            additional_headers=sarvam_headers(),
+            open_timeout=12, close_timeout=5, max_size=2 * 1024 * 1024,
+        ) as sarvam:
+            await websocket.send_json({'type': 'ready'})
+            await sarvam.send(json.dumps({'event': 'speech_start'}))
+
+            async def forward_audio() -> None:
+                while True:
+                    message = json.loads(await websocket.receive_text())
+                    event = message.get('event')
+                    if event == 'audio':
+                        audio = message.get('audio', '')
+                        if not isinstance(audio, str) or len(audio) > 18000:
+                            raise ValueError('Invalid audio frame.')
+                        await sarvam.send(json.dumps({'event': 'audio_input', 'audio': audio}))
+                    elif event == 'finish':
+                        client_finished.set()
+                        await sarvam.send(json.dumps({'event': 'speech_end'}))
+                        await sarvam.send(json.dumps({'event': 'flush'}))
+                        return
+                    elif event == 'cancel':
+                        return
+
+            async def receive_results() -> None:
+                async for raw in sarvam:
+                    data = json.loads(raw)
+                    event = data.get('event', '')
+                    text = str(data.get('text') or data.get('transcript') or '').strip()
+                    if event == 'transcript.partial' and text:
+                        await websocket.send_json({'type': 'partial', 'text': text})
+                    elif event == 'transcript.final' and text:
+                        final_parts.append(text)
+                        if client_finished.is_set():
+                            transcript = ' '.join(final_parts).strip()
+                            detected = str(data.get('language') or source_language)
+                            normalized = await normalize_transcript(
+                                websocket.app.state.sarvam_client, transcript,
+                                detected, source_language,
+                            )
+                            result = await create_response(
+                                websocket.app.state.sarvam_client,
+                                normalized, source_language,
+                            )
+                            await websocket.send_json({
+                                'type': 'result', **result,
+                                'detected_language': detected,
+                            })
+                            return
+                    elif event == 'error':
+                        await websocket.send_json({
+                            'type': 'error',
+                            'message': str(data.get('message') or 'Sarvam streaming failed.'),
+                        })
+                        return
+
+            sender = asyncio.create_task(forward_audio())
+            receiver = asyncio.create_task(receive_results())
+            done, pending = await asyncio.wait(
+                {sender, receiver}, return_when=asyncio.FIRST_COMPLETED,
+            )
+            # Always retrieve task exceptions. In particular, a normal mobile
+            # disconnect raises WebSocketDisconnect in forward_audio; leaving
+            # it unretrieved could leave the Sarvam relay in an inconsistent
+            # state and produce a spurious error on the next recording.
+            if sender in done:
+                sender.result()
+                if not receiver.done():
+                    await receiver
+            else:
+                receiver.result()
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+    except (WebSocketDisconnect, asyncio.CancelledError):
+        return
+    except Exception as error:
+        print(f'Sarvam stream failed: {error!r}', flush=True)
+        # A mobile client may have already disconnected (for example after a
+        # network hand-off), in which case ASGI forbids another send. Android
+        # handles that close locally and shows the retry state.
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
