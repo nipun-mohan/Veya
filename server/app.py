@@ -1,6 +1,7 @@
 """Veya's Sarvam-only speech and writing gateway."""
 import asyncio
 import base64
+import hmac
 import json
 import os
 import subprocess
@@ -15,7 +16,9 @@ import firebase_admin
 from firebase_admin import auth as firebase_auth
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from server.dashboard import DASHBOARD_HTML, GatewayMetrics, SUBSCRIPTIONS
 
 load_dotenv(Path(__file__).with_name('.env'))
 
@@ -28,6 +31,9 @@ SARVAM_STYLE_MODEL = os.environ.get(
     'SARVAM_STYLE_MODEL', 'sarvam-105b-conversations',
 )
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
+# Required for the internal dashboard. Leave unset to keep the dashboard
+# completely unavailable until its value is supplied through Secret Manager.
+VEYA_ADMIN_TOKEN = os.environ.get('VEYA_ADMIN_TOKEN', '').strip()
 
 # Languages available in Veya's current selector.
 LANGUAGE_NAMES = {
@@ -74,11 +80,19 @@ async def lifespan(app: FastAPI):
         timeout=httpx.Timeout(70, connect=10),
         limits=httpx.Limits(max_connections=24, max_keepalive_connections=12),
     )
+    app.state.metrics = GatewayMetrics()
     yield
     await app.state.sarvam_client.aclose()
 
 
 app = FastAPI(title='Veya Translation Gateway', lifespan=lifespan)
+
+
+def require_admin(request: Request) -> None:
+    """Keep the operations dashboard separate from mobile Firebase users."""
+    supplied = request.headers.get('x-veya-admin-token', '')
+    if not VEYA_ADMIN_TOKEN or not hmac.compare_digest(supplied, VEYA_ADMIN_TOKEN):
+        raise HTTPException(401, 'Administrator authentication is required.')
 
 
 def verified_firebase_user(request: Request) -> dict[str, object]:
@@ -451,7 +465,13 @@ async def create_response(client: httpx.AsyncClient, transcript: str, source_lan
 async def measure_process_time(request, call_next):
     global last_process_duration_ms
     started = time.perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        request.app.state.metrics.record_http(request.url.path, 500)
+        raise
+    if request.url.path not in {'/health', '/internal/dashboard', '/internal/api/overview'}:
+        request.app.state.metrics.record_http(request.url.path, response.status_code)
     if request.url.path in {'/process', '/process-audio'}:
         last_process_duration_ms = round((time.perf_counter() - started) * 1000)
         response.headers['X-Veya-Process-Ms'] = str(last_process_duration_ms)
@@ -471,6 +491,26 @@ def health():
         'sarvam_key_configured': bool(SARVAM_API_KEY),
         'last_process_duration_ms': last_process_duration_ms,
         'last_process_breakdown_ms': last_process_breakdown_ms,
+    }
+
+
+@app.get('/internal/dashboard', response_class=HTMLResponse, include_in_schema=False)
+def internal_dashboard():
+    """The page contains no data; API reads require the admin header."""
+    return DASHBOARD_HTML
+
+
+@app.get('/internal/api/overview', include_in_schema=False)
+def internal_overview(request: Request):
+    require_admin(request)
+    metrics = request.app.state.metrics.snapshot()
+    return {
+        **metrics,
+        'health': health(),
+        'subscriptions': [
+            {'name': name, 'purpose': purpose, 'cost_status': status}
+            for name, purpose, status in SUBSCRIPTIONS
+        ],
     }
 
 
@@ -661,11 +701,15 @@ async def process_raw_audio(request: Request):
 async def stream_audio(websocket: WebSocket):
     """Relay raw PCM from Veya to Sarvam's realtime STT WebSocket."""
     await websocket.accept()
+    stream_started = False
+    stream_outcome = 'failed'
     try:
         verified_firebase_socket(websocket)
         ensure_sarvam()
         source_language = websocket.query_params.get('source_language', '')
         ensure_language(source_language)
+        websocket.app.state.metrics.stream_opened()
+        stream_started = True
     except HTTPException as error:
         await websocket.send_json({'type': 'error', 'message': error.detail})
         await websocket.close(code=4401)
@@ -691,6 +735,7 @@ async def stream_audio(websocket: WebSocket):
             await sarvam.send(json.dumps({'event': 'speech_start'}))
 
             async def forward_audio() -> None:
+                nonlocal stream_outcome
                 while True:
                     message = json.loads(await websocket.receive_text())
                     event = message.get('event')
@@ -705,9 +750,11 @@ async def stream_audio(websocket: WebSocket):
                         await sarvam.send(json.dumps({'event': 'flush'}))
                         return
                     elif event == 'cancel':
+                        stream_outcome = 'cancelled'
                         return
 
             async def receive_results() -> None:
+                nonlocal stream_outcome
                 async for raw in sarvam:
                     data = json.loads(raw)
                     event = data.get('event', '')
@@ -731,6 +778,7 @@ async def stream_audio(websocket: WebSocket):
                                 'type': 'result', **result,
                                 'detected_language': detected,
                             })
+                            stream_outcome = 'completed'
                             return
                     elif event == 'error':
                         await websocket.send_json({
@@ -766,6 +814,8 @@ async def stream_audio(websocket: WebSocket):
         # network hand-off), in which case ASGI forbids another send. Android
         # handles that close locally and shows the retry state.
     finally:
+        if stream_started:
+            websocket.app.state.metrics.stream_finished(stream_outcome)
         try:
             await websocket.close()
         except Exception:

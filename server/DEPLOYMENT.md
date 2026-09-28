@@ -43,3 +43,18 @@ curl http://127.0.0.1:8080/health
 - Put a gateway/auth layer in front of the public API before releasing Veya to users. A static mobile-app token is not sufficient protection because it can be extracted from an APK.
 
 After deployment, set Veya's **Server translation** setting to the new HTTPS base URL, for example `https://api.example.com`.
+
+## Internal operations dashboard
+
+Veya includes a small password-protected dashboard at
+`https://api.heyveya.app/internal/dashboard`. It shows traffic and health from
+its current Cloud Run instance plus the configured service inventory.
+
+Set `VEYA_ADMIN_TOKEN` as a Secret Manager value before deploying. The page
+sends this token in an `X-Veya-Admin-Token` request header and keeps it only in
+the browser session. Do not put this value in the Android app.
+
+The dashboard deliberately does not estimate costs. For accurate costs, enable
+Cloud Billing export to BigQuery and connect a Sarvam usage or invoice feed.
+Cloud Run may run more than one instance, so aggregate traffic belongs in Cloud
+Monitoring for a full production-wide view.
