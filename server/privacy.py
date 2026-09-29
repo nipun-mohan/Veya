@@ -1,0 +1,27 @@
+"""Public legal pages for Veya."""
+
+PRIVACY_POLICY_HTML = r'''<!doctype html>
+<html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Veya Privacy Policy</title><style>
+:root{--ink:#230843;--orange:#ff8a20;--paper:#fffaf2;--muted:#655d6e;--line:#eadfd2}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.62}.wrap{max-width:800px;margin:auto;padding:54px 24px 84px}.brand{display:flex;gap:11px;align-items:center;font-size:20px;font-weight:850;letter-spacing:-.04em}.mark{width:34px;height:34px;border-radius:11px;background:var(--orange);display:grid;place-items:center}.mark svg{width:24px}h1{font-size:44px;line-height:1.05;letter-spacing:-.055em;margin:64px 0 10px}h2{font-size:21px;letter-spacing:-.025em;margin:40px 0 8px}p,li{font-size:16px;color:#31263d}.date,.note{color:var(--muted);font-size:14px}.note{background:#fff1df;border-left:4px solid var(--orange);padding:14px 16px;border-radius:0 12px 12px 0}a{color:#8b3b00;font-weight:700}ul{padding-left:22px}footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:14px}@media(max-width:520px){.wrap{padding:36px 20px 60px}h1{font-size:36px;margin-top:46px}}
+</style></head><body><main class="wrap"><div class="brand"><span class="mark"><svg viewBox="0 0 100 100" aria-hidden="true"><g stroke="#230843" stroke-width="13" stroke-linecap="round"><path d="M16 28v36"/><path d="M33 42v36"/><path d="M50 56v36"/><path d="M67 42v36"/><path d="M84 28v36"/></g></svg></span>veya</div>
+<h1>Privacy Policy</h1><p class="date">Effective date: 29 September 2026</p>
+<p>This Privacy Policy explains how Veya handles information when you use its voice transcription, translation, and floating-assistant features.</p>
+<p class="note">Veya is designed to process your voice and text only when you choose to use its recording or translation features. It does not sell your personal information or use it for advertising.</p>
+
+<h2>Information we handle</h2><ul><li><strong>Phone number and authentication data.</strong> We use your phone number to verify your account through Firebase Authentication. Your number is stored on your device in encrypted storage and is processed by Firebase to provide the verification service.</li><li><strong>Voice recordings and generated text.</strong> When you start a recording, Veya sends the audio securely to the Veya gateway and Sarvam AI to transcribe, translate, and create the selected writing style. The gateway processes these requests in memory and does not retain recordings or generated messages after processing.</li><li><strong>Selected language and app preferences.</strong> Your speaking language, chosen apps, floating-icon preferences, and onboarding choices are stored locally on your device.</li><li><strong>Accessibility information.</strong> If you enable the floating assistant, Veya uses Android's Accessibility Service only to determine whether a selected app has an active, editable, non-password message field, so it can show the assistant and insert text when you request it. Veya does not use Accessibility Service access to collect passwords or to read, sell, or build profiles from your messages.</li><li><strong>Technical and security information.</strong> Our gateway may process limited request and error metadata to operate, secure, and improve reliability of the service.</li></ul>
+
+<h2>How we use information</h2><p>We use this information only to verify your account, provide transcription and translation, insert or copy the message you select, maintain your settings, prevent abuse, and operate and secure Veya.</p>
+
+<h2>Service providers</h2><p>Veya uses the following providers to operate the service:</p><ul><li><strong>Google Firebase Authentication</strong> for phone-number verification and account identity.</li><li><strong>Google Cloud</strong> for Veya's gateway and service infrastructure.</li><li><strong>Sarvam AI</strong> for speech-to-text, translation, and writing-style processing.</li></ul><p>These providers process information only as needed to deliver their services. Their handling is governed by their respective terms and privacy policies.</p>
+
+<h2>Your choices</h2><ul><li>You can decline or revoke microphone and Accessibility Service permissions in Android Settings. Without them, the related feature will not work.</li><li>You can change your language and selected-app preferences in Veya.</li><li>You can request deletion of your account-related information by contacting us. Firebase Authentication account data will be removed where applicable.</li></ul>
+
+<h2>Security</h2><p>Veya uses encrypted network connections and keeps service credentials on the server rather than in the app. No method of transmission or storage is completely secure, but we use reasonable safeguards appropriate to the service.</p>
+
+<h2>Children</h2><p>Veya is not directed to children under 13 and we do not knowingly collect personal information from children.</p>
+
+<h2>Changes to this policy</h2><p>We may update this policy when Veya changes. The current version and effective date will always be available on this page.</p>
+
+<h2>Contact</h2><p>For privacy questions or data-deletion requests, contact <a href="mailto:nipun@heyveya.app">nipun@heyveya.app</a>.</p>
+<footer>© 2026 Veya</footer></main></body></html>'''

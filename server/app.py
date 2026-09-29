@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from server.costs import CloudBillingCosts
 from server.dashboard import DASHBOARD_HTML, GatewayMetrics, SUBSCRIPTIONS
+from server.privacy import PRIVACY_POLICY_HTML
 
 load_dotenv(Path(__file__).with_name('.env'))
 
@@ -498,6 +499,12 @@ def health():
         'last_process_duration_ms': last_process_duration_ms,
         'last_process_breakdown_ms': last_process_breakdown_ms,
     }
+
+
+@app.get('/privacy', response_class=HTMLResponse, include_in_schema=False)
+def privacy_policy():
+    """Public, stable privacy-policy URL for the app and Play Console."""
+    return PRIVACY_POLICY_HTML
 
 
 @app.get('/internal/dashboard', response_class=HTMLResponse, include_in_schema=False)
