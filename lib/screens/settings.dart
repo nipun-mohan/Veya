@@ -5,6 +5,7 @@ import '../core/theme.dart';
 import '../core/platform.dart';
 import '../widgets/shared.dart';
 import 'accessibility_consent.dart';
+import 'privacy_policy.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VeyaStore store;
@@ -300,6 +301,16 @@ class _SettingsScreenState extends State<SettingsScreen>
               icon: Icons.tune_rounded,
               title: 'Translation settings',
               onTap: () => _editTranslationEndpoint(context),
+            ),
+            const Divider(),
+            _PreferenceRow(
+              icon: Icons.privacy_tip_outlined,
+              title: 'Privacy policy',
+              subtitle: 'View the latest policy',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
+              ),
             ),
           ],
         ),

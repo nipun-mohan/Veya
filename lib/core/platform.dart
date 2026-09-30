@@ -5,7 +5,10 @@ class AndroidBridge {
   static const channel = MethodChannel('app.veya/assistant');
   static bool get supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-  static bool get assistantAvailable => supported && appFlavor == 'assistant';
+  // The Play-distributed standard flavor includes the same native assistant
+  // implementation as the local assistant flavor.
+  static bool get assistantAvailable =>
+      supported && (appFlavor == 'assistant' || appFlavor == 'standard');
   static Future<T?> call<T>(
     String method, [
     Map<String, dynamic>? arguments,

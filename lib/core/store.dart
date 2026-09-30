@@ -106,13 +106,7 @@ class VeyaStore extends ChangeNotifier {
   }
 
   Future<void> syncNative() async {
-    // The accessibility service runs outside Flutter. Refresh the Firebase
-    // session whenever its configuration is sent so its next upload cannot
-    // be rejected after an otherwise normal token rotation.
     final user = FirebaseAuth.instance.currentUser;
-    // The accessibility service keeps running while Flutter is backgrounded.
-    // Force a refresh when Veya is opened so its next recording never reuses
-    // an expired one-hour Firebase ID token.
     final refreshedToken = user == null ? null : await user.getIdToken(true);
     if (refreshedToken != null && refreshedToken.isNotEmpty) {
       await secure.write(key: 'veya_firebase_id_token', value: refreshedToken);
@@ -190,4 +184,5 @@ class VeyaStore extends ChangeNotifier {
     phoneNationalNumber = profile.nationalNumber;
     notifyListeners();
   }
+
 }

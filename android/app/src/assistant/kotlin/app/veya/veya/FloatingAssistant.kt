@@ -550,8 +550,13 @@ private fun cancel() {
    state="recording"
    lastSpeechAt=SystemClock.elapsedRealtime()
    heardSpeech=false
-   startSarvamStream(requestId)
+   // Show the recording controls in this frame. A Firebase refresh here used
+   // to block the accessibility-service main thread for several seconds,
+   // making a tap appear to do nothing before capture began.
    recorderControls(); main.post(amplitudeTicker); main.postDelayed(silenceWatcher,1_000)
+   main.post {
+    if (state == "recording") startSarvamStream(requestId)
+   }
   } catch(e: Exception) { Log.e("VeyaAssistant", "Floating recorder startup failed", e); cancel(); failure("Could not start recording. Open Veya once, then try again.") }
  }
 
@@ -572,44 +577,26 @@ private fun cancel() {
   )
   if(streamRecorder?.state != AudioRecord.STATE_INITIALIZED) error("Could not start the microphone.")
   streamRequestId=id
+  val audio=streamRecorder ?: return
+  // Start microphone capture before the network handshake. OkHttp queues the
+  // first audio frames until the WebSocket is open, so the user can speak as
+  // soon as they tap the Veya bubble instead of waiting on network latency.
+  runCatching { audio.startRecording() }.onFailure { error ->
+   Log.e("VeyaAssistant", "PCM recorder startup failed", error)
+   cancel(); failure("Could not start the microphone.")
+   return
+  }
   val request=Request.Builder()
    .url("$streamEndpoint/stream?source_language=${java.net.URLEncoder.encode(language, "UTF-8")}")
-   // Accessibility services can outlive the token cached by Flutter. Refresh
-   // it before opening the long-lived authenticated stream.
-   .apply { activeFirebaseToken(forceRefresh=true)?.let { header("Authorization", "Bearer $it") } }
+   // Configuration from Flutter refreshes and persists this token whenever
+   // Veya opens. Reading it here avoids a network-bound Firebase refresh on
+   // the recording tap; the WebSocket can begin microphone capture at once.
+   .apply { cachedFirebaseToken()?.let { header("Authorization", "Bearer $it") } }
    .build()
-  streamSocket=streamClient.newWebSocket(request, object : WebSocketListener() {
+  val socket=streamClient.newWebSocket(request, object : WebSocketListener() {
    override fun onOpen(socket: WebSocket, response: Response) {
     if(id != streamRequestId || state != "recording") {
      socket.send(JSONObject().put("event", "cancel").toString()); socket.close(1000,"cancelled"); return
-    }
-    val audio=streamRecorder ?: return
-    runCatching { audio.startRecording() }.onFailure { error ->
-     Log.e("VeyaAssistant", "PCM recorder startup failed", error)
-     main.post { if(id == streamRequestId) { cancel(); failure("Could not start the microphone.") } }
-     return
-    }
-    streamWorker.execute {
-     val chunk=ByteArray(3200) // 100 ms of mono linear16 at 16 kHz.
-     while(state == "recording" && id == streamRequestId && streamRecorder === audio) {
-      val count=audio.read(chunk,0,chunk.size)
-      if(count <= 0) continue
-      var peak=0
-      var index=0
-      while(index + 1 < count) {
-       val sample=((chunk[index].toInt() and 0xff) or (chunk[index + 1].toInt() shl 8))
-       peak=max(peak, abs(sample.toShort().toInt())); index += 2
-      }
-      recordingAmplitude=peak
-      if (peak >= VOICE_ACTIVITY_THRESHOLD) {
-       heardSpeech=true
-       lastSpeechAt=SystemClock.elapsedRealtime()
-      }
-      val encoded=android.util.Base64.encodeToString(
-       chunk.copyOf(count), android.util.Base64.NO_WRAP,
-      )
-      if(!socket.send(JSONObject().put("event", "audio").put("audio", encoded).toString())) break
-     }
     }
    }
    override fun onMessage(socket: WebSocket, text: String) {
@@ -651,6 +638,29 @@ private fun cancel() {
     }
    }
   })
+  streamSocket=socket
+  streamWorker.execute {
+   val chunk=ByteArray(3200) // 100 ms of mono linear16 at 16 kHz.
+   while(state == "recording" && id == streamRequestId && streamRecorder === audio) {
+    val count=audio.read(chunk,0,chunk.size)
+    if(count <= 0) continue
+    var peak=0
+    var index=0
+    while(index + 1 < count) {
+     val sample=((chunk[index].toInt() and 0xff) or (chunk[index + 1].toInt() shl 8))
+     peak=max(peak, abs(sample.toShort().toInt())); index += 2
+    }
+    recordingAmplitude=peak
+    if (peak >= VOICE_ACTIVITY_THRESHOLD) {
+     heardSpeech=true
+     lastSpeechAt=SystemClock.elapsedRealtime()
+    }
+    val encoded=android.util.Base64.encodeToString(
+     chunk.copyOf(count), android.util.Base64.NO_WRAP,
+    )
+    if(!socket.send(JSONObject().put("event", "audio").put("audio", encoded).toString())) break
+   }
+  }
  }
  private fun recorderControls() {
   remove()
@@ -775,8 +785,6 @@ private fun cancel() {
   var response=httpClient.newCall(requestFor(activeFirebaseToken())).execute()
   if(response.code==401 || response.code==403) {
    response.close()
-   // A background accessibility service may outlive the token supplied by
-   // Flutter. Refresh the persisted Firebase session and retry once.
    response=httpClient.newCall(requestFor(activeFirebaseToken(forceRefresh=true))).execute()
   }
   response.use { response ->
@@ -795,6 +803,8 @@ private fun cancel() {
   if(!refreshed.isNullOrBlank()) prefs.edit().putString("firebaseIdToken",refreshed).apply()
   return refreshed ?: prefs.getString("firebaseIdToken","")?.takeIf { it.isNotBlank() }
  }
+ private fun cachedFirebaseToken(): String? =
+  prefs.getString("firebaseIdToken", "")?.takeIf { it.isNotBlank() }
  private fun postJson(url: String, body: JSONObject): JSONObject {
   // Style text is safe JSON. The normal endpoint avoids edge WAF rejection of
   // opaque payloads before they reach the authenticated Cloud Run service.
@@ -802,8 +812,6 @@ private fun cancel() {
    .post(body.toString().toRequestBody("application/json".toMediaType()))
    .apply { token?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Bearer $it") } }
    .build()
-  // Style generation runs after the result panel opens, so its cached Firebase
-  // token can be stale even when the recording stream was authenticated.
   var response=httpClient.newCall(requestFor(activeFirebaseToken())).execute()
   if(response.code==401 || response.code==403) {
    response.close()

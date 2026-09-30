@@ -13,7 +13,7 @@ import 'screens/onboarding.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Render immediately. Firebase and local configuration now load while the
+  // Render immediately. Local configuration now loads while the
   // splash animation is visible instead of leaving a blank native window.
   runApp(const VeyaBootstrap());
 }
@@ -38,11 +38,11 @@ class _VeyaBootstrapState extends State<VeyaBootstrap> {
     await Firebase.initializeApp();
     await VeyaStrings.preload();
     final store = VeyaStore(await SharedPreferences.getInstance());
-  // Load appearance and assistant settings before rendering Settings. This
-  // prevents a delayed load from replacing a newly adjusted slider value.
+    // Load appearance and assistant settings before rendering Settings. This
+    // prevents a delayed load from replacing a newly adjusted slider value.
     await store.load();
-  // Existing installs used a local placeholder OTP. Require one real Firebase
-  // verification before granting access to the protected flow.
+    // Require one real Firebase verification before granting access to the
+    // protected flow.
     if (store.onboarded && FirebaseAuth.instance.currentUser == null) {
       store.onboarded = false;
       await store.persist();
@@ -69,9 +69,9 @@ class VeyaApp extends StatelessWidget {
       builder: (context, child) {
         final media = MediaQuery.of(context);
         return MediaQuery(
-          data: media.copyWith(textScaler: TextScaler.linear(
-            media.textScaler.scale(1) * .90,
-          )),
+          data: media.copyWith(
+            textScaler: TextScaler.linear(media.textScaler.scale(1) * .90),
+          ),
           child: child ?? const SizedBox.shrink(),
         );
       },

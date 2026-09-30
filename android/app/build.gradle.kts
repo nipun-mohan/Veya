@@ -23,6 +23,16 @@ android {
         create("assistant") { dimension = "experience" }
     }
 
+    // Closed testing and Play releases use the standard flavor. It must carry
+    // the same accessibility service and bridge as the assistant flavor.
+    sourceSets {
+        getByName("standard") {
+            java.setSrcDirs(listOf("src/assistant/kotlin"))
+            res.setSrcDirs(listOf("src/assistant/res"))
+            manifest.srcFile("src/assistant/AndroidManifest.xml")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

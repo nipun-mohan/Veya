@@ -27,12 +27,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   bool otpVerified = false;
   String dial = '+91', error = '';
   String? verificationId;
+  int? forceResendingToken;
   String progress = '';
+  int resendSeconds = 0;
   final phone = TextEditingController();
   final otp = TextEditingController();
   final otpFocus = FocusNode();
   PhoneProfile? pendingPhone;
   Timer? animation;
+  Timer? resendTimer;
   String get number => '$dial${phone.text.replaceAll(RegExp(r'\D'), '')}';
   bool get hasValidPhone => PhoneProfile.parse(dial, phone.text) != null;
   bool get hasValidOtp => RegExp(r'^\d{6}$').hasMatch(otp.text.trim());
@@ -68,7 +71,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     setState(() {
       otp.text = code;
       error = '';
-      progress = 'Code received — verifying…';
+      progress = '';
     });
     await Future<void>.delayed(const Duration(milliseconds: 220));
     if (mounted && step == 2 && !busy) await verifyOtp();
@@ -115,6 +118,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     animation?.cancel();
+    resendTimer?.cancel();
     phone.dispose();
     otp.dispose();
     otpFocus.dispose();
@@ -122,6 +126,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   }
 
   Future<void> go(int value) async {
+    if (value != 2) {
+      resendTimer?.cancel();
+      resendTimer = null;
+    }
     setState(() {
       step = value;
       error = '';
@@ -156,7 +164,26 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       Navigator.pop(context);
   }
 
-  Future<void> savePhone() async {
+  void _startResendCountdown() {
+    resendTimer?.cancel();
+    setState(() => resendSeconds = 30);
+    resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || resendSeconds <= 1) {
+        timer.cancel();
+        if (mounted) setState(() => resendSeconds = 0);
+        return;
+      }
+      setState(() => resendSeconds--);
+    });
+  }
+
+  Future<void> resendCode() async {
+    if (busy || resendSeconds > 0) return;
+    otp.clear();
+    await savePhone(isResend: true);
+  }
+
+  Future<void> savePhone({bool isResend = false}) async {
     final profile = PhoneProfile.parse(dial, phone.text);
     if (profile == null) {
       setState(
@@ -167,7 +194,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     setState(() {
       busy = true;
       error = '';
-      progress = 'Sending your verification code…';
+      progress = isResend
+          ? 'Sending a new verification code…'
+          : 'Sending your verification code…';
       pendingPhone = profile;
     });
     try {
@@ -179,6 +208,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: profile.number,
         timeout: const Duration(seconds: 60),
+        forceResendingToken: isResend ? forceResendingToken : null,
         verificationCompleted: (credential) async {
           try {
             final result = await FirebaseAuth.instance.signInWithCredential(
@@ -200,13 +230,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               error = _authError(e);
             });
         },
-        codeSent: (id, _) async {
+        codeSent: (id, resendToken) async {
           verificationId = id;
+          forceResendingToken = resendToken;
           if (mounted) {
-            await go(2);
+            if (!isResend) await go(2);
+            _startResendCountdown();
             setState(() {
               busy = false;
-              progress = 'Waiting for your SMS code…';
+              progress = '';
             });
           }
         },
@@ -246,7 +278,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     if (mounted)
       setState(() {
         busy = true;
-        progress = 'Finishing verification…';
+        progress = '';
       });
     final user = result.user;
     if (user == null) throw StateError('No signed-in user returned');
@@ -279,7 +311,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     setState(() {
       busy = true;
       error = '';
-      progress = 'Verifying your code…';
+      progress = '';
     });
     try {
       final credential = PhoneAuthProvider.credential(
@@ -451,19 +483,24 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         onPressed: busy || !hasValidOtp ? null : verifyOtp,
                         child: busy
                             ? const VeyaLoader()
-                            : const LText(
-                                'Verify code',
-                              ),
+                            : const LText('Verify code'),
                       ),
                     ),
-                    const SizedBox(height: 18),
-                    const LText(
-                      'Resend code in 00:24',
-                      style: TextStyle(
-                        color: VeyaColors.muted,
-                        fontSize: 13,
-                        decoration: TextDecoration.underline,
-                        fontWeight: FontWeight.w700,
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: busy || resendSeconds > 0 ? null : resendCode,
+                      child: LText(
+                        resendSeconds > 0
+                            ? 'Resend code in 00:${resendSeconds.toString().padLeft(2, '0')}'
+                            : 'Resend code',
+                        style: TextStyle(
+                          color: resendSeconds > 0
+                              ? VeyaColors.muted
+                              : VeyaColors.ink,
+                          fontSize: 13,
+                          decoration: TextDecoration.underline,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ],
@@ -935,7 +972,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           FilledButton(
-                            onPressed: busy ||
+                            onPressed:
+                                busy ||
                                     (step == 1 && !hasValidPhone) ||
                                     (step == 2 && !hasValidOtp)
                                 ? null

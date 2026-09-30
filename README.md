@@ -25,4 +25,21 @@ See [server/README.md](server/README.md). Keep the Sarvam key in `server/.env`; 
 ../../tools/flutter/bin/flutter build apk --flavor assistant --release
 ```
 
-The Assistant flavour uses Android accessibility to show the overlay and insert text into the focused field. The Standard flavour builds the Flutter app without the accessibility assistant.
+Both Android flavours include the complete Veya assistant: the accessibility
+service, floating overlay, microphone permission bridge, and SMS Retriever.
+
+### Play Store / closed testing
+
+Always build the `standard` flavour for Google Play. It is the default Flutter
+flavour and is wired to the same Android assistant implementation as the local
+`assistant` flavour.
+
+```zsh
+../../tools/flutter/bin/flutter build appbundle --flavor standard --release
+```
+
+Upload only the generated bundle at:
+
+```text
+build/app/outputs/bundle/standardRelease/app-standard-release.aab
+```
