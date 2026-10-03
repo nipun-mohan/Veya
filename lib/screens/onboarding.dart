@@ -1,8 +1,10 @@
 import '../core/localization.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import '../core/store.dart';
 import '../core/models.dart';
 import '../core/platform.dart';
@@ -10,11 +12,21 @@ import '../core/phone_profile.dart';
 import '../core/theme.dart';
 import '../widgets/shared.dart';
 import 'accessibility_consent.dart';
+import 'home.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VeyaStore store;
   final bool replay;
-  const OnboardingScreen({super.key, required this.store, this.replay = false});
+
+  /// Used after logout. It keeps the user in the sign-in flow and bypasses
+  /// the introductory language and tutorial screens.
+  final bool loginOnly;
+  const OnboardingScreen({
+    super.key,
+    required this.store,
+    this.replay = false,
+    this.loginOnly = false,
+  });
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
@@ -26,8 +38,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   bool busy = false, microphone = false, assistant = false;
   bool otpVerified = false;
   String dial = '+91', error = '';
-  String? verificationId;
-  int? forceResendingToken;
+  String? otpRequestId;
   String progress = '';
   int resendSeconds = 0;
   final phone = TextEditingController();
@@ -42,13 +53,11 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     step = widget.store.prefs.getInt('profile_setup_step') ?? 1;
     otpVerified = widget.store.prefs.getBool('phoneOtpVerified') ?? false;
-    // A verification session is intentionally never restored after a restart.
-    // Firebase's verification id is process-scoped, so returning to an old OTP
-    // screen would leave the user with a code that cannot be verified.
-    if (step == 0 || step == 2 || widget.replay || !_flow.contains(step)) {
+    // OTP requests intentionally never survive an app restart. The language
+    // step is post-verification, however, and must remain resumable.
+    if (step == 2 || widget.replay || !_flow.contains(step)) {
       step = 1;
       widget.store.prefs.remove('profile_setup_step');
     }
@@ -59,9 +68,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       if (mounted && step == 3) setState(() => demo = (demo + 1) % 4);
     });
     if (AndroidBridge.assistantAvailable) {
+      WidgetsBinding.instance.addObserver(this);
       AndroidBridge.channel.setMethodCallHandler(_handleNativeEvent);
     }
-    refreshPermissions();
+    if (MicrophonePermissions.available) refreshPermissions();
   }
 
   Future<dynamic> _handleNativeEvent(MethodCall call) async {
@@ -79,12 +89,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   }
 
   Future<void> refreshPermissions() async {
-    final values = await Future.wait([
-      AndroidBridge.call<bool>('isEnabled'),
-      AndroidBridge.call<bool>('isMicrophoneGranted'),
-    ]);
-    final enabled = values[0] ?? false;
-    final microphoneGranted = values[1] ?? false;
+    final microphoneGranted = await MicrophonePermissions.isGranted();
+    final enabled = AndroidBridge.assistantAvailable
+        ? await AndroidBridge.call<bool>('isEnabled') ?? false
+        : false;
     if (!mounted) return;
     setState(() {
       assistant = enabled;
@@ -111,12 +119,17 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) refreshPermissions();
+    if (AndroidBridge.assistantAvailable &&
+        state == AppLifecycleState.resumed) {
+      refreshPermissions();
+    }
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    if (AndroidBridge.assistantAvailable) {
+      WidgetsBinding.instance.removeObserver(this);
+    }
     animation?.cancel();
     resendTimer?.cancel();
     phone.dispose();
@@ -205,51 +218,32 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       if (AndroidBridge.assistantAvailable) {
         await AndroidBridge.call('startOtpListener');
       }
-      await FirebaseAuth.instance.verifyPhoneNumber(
-        phoneNumber: profile.number,
-        timeout: const Duration(seconds: 60),
-        forceResendingToken: isResend ? forceResendingToken : null,
-        verificationCompleted: (credential) async {
-          try {
-            final result = await FirebaseAuth.instance.signInWithCredential(
-              credential,
-            );
-            await _completePhoneVerification(result, profile);
-          } on FirebaseAuthException catch (e) {
-            if (mounted)
-              setState(() {
-                progress = '';
-                error = _authError(e);
-              });
-          }
-        },
-        verificationFailed: (e) {
-          if (mounted)
-            setState(() {
-              busy = false;
-              error = _authError(e);
-            });
-        },
-        codeSent: (id, resendToken) async {
-          verificationId = id;
-          forceResendingToken = resendToken;
-          if (mounted) {
-            if (!isResend) await go(2);
-            _startResendCountdown();
-            setState(() {
-              busy = false;
-              progress = '';
-            });
-          }
-        },
-        codeAutoRetrievalTimeout: (id) => verificationId = id,
+      final response = await http.post(
+        Uri.parse('${widget.store.endpoint}/v1/auth/otp/send'),
+        headers: const {'content-type': 'application/json'},
+        body: jsonEncode({'phone': profile.number}),
       );
-    } on FirebaseAuthException catch (e) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (response.statusCode >= 400 || data['otp_id'] == null) {
+        throw StateError(
+          data['detail'] ?? 'Could not send a verification code.',
+        );
+      }
+      otpRequestId = data['otp_id'] as String;
+      if (mounted) {
+        if (!isResend) await go(2);
+        _startResendCountdown();
+        setState(() {
+          busy = false;
+          progress = '';
+        });
+      }
+    } catch (e) {
       if (mounted)
         setState(() {
           busy = false;
           progress = '';
-          error = _authError(e);
+          error = _otpRequestError(e);
         });
     }
   }
@@ -269,6 +263,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       default:
         return 'Could not verify your number. Please try again.';
     }
+  }
+
+  String _otpRequestError(Object error) {
+    final text = error.toString();
+    if (text.contains('OTP_RATE_LIMITED'))
+      return 'Too many codes requested. Please try again later.';
+    if (text.contains('INSUFFICIENT_BALANCE'))
+      return 'Verification is temporarily unavailable.';
+    return 'Could not send a verification code. Please try again.';
   }
 
   Future<void> _completePhoneVerification(
@@ -293,12 +296,24 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     await widget.store.secure.write(key: 'veya_firebase_uid', value: user.uid);
     await widget.store.prefs.setBool('phoneOtpVerified', true);
     otpVerified = true;
+    if (widget.loginOnly) {
+      final microphoneGranted = await MicrophonePermissions.isGranted();
+      final assistantEnabled = AndroidBridge.assistantAvailable
+          ? await AndroidBridge.call<bool>('isEnabled') ?? false
+          : true;
+      if (microphoneGranted && assistantEnabled) {
+        await complete();
+      } else if (mounted) {
+        await go(4);
+      }
+      return;
+    }
     if (mounted) await go(0);
   }
 
   Future<void> verifyOtp() async {
     final profile = pendingPhone ?? PhoneProfile.parse(dial, phone.text);
-    final id = verificationId;
+    final id = otpRequestId;
     if (profile == null) return go(1);
     if (id == null) {
       setState(() => error = 'Request a new code and try again.');
@@ -314,13 +329,17 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       progress = '';
     });
     try {
-      final credential = PhoneAuthProvider.credential(
-        verificationId: id,
-        smsCode: otp.text.trim(),
+      final response = await http.post(
+        Uri.parse('${widget.store.endpoint}/v1/auth/otp/verify'),
+        headers: const {'content-type': 'application/json'},
+        body: jsonEncode({'phone': profile.number, 'code': otp.text.trim()}),
       );
-      final result = await FirebaseAuth.instance.signInWithCredential(
-        credential,
-      );
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final token = data['firebase_custom_token'] as String?;
+      if (response.statusCode >= 400 || token == null) {
+        throw StateError(data['detail'] ?? 'That code is not correct.');
+      }
+      final result = await FirebaseAuth.instance.signInWithCustomToken(token);
       await _completePhoneVerification(result, profile);
     } on FirebaseAuthException catch (e) {
       if (mounted)
@@ -328,6 +347,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           progress = '';
           error = _authError(e);
         });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          progress = '';
+          error = e.toString().contains('VERIFY_RATE_LIMITED')
+              ? 'Too many incorrect attempts. Request a new code.'
+              : 'That code is not correct. Please try again.';
+        });
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -338,11 +366,46 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     await widget.store.prefs.setInt('setup_version', 3);
     await widget.store.prefs.remove('profile_setup_step');
     await widget.store.persist();
+    if (widget.loginOnly && mounted) {
+      // Start a fresh shell so the prior Settings tab cannot remain selected.
+      Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => HomeShell(store: widget.store)),
+        (_) => false,
+      );
+      return;
+    }
     if (widget.replay && mounted) Navigator.pop(context);
   }
 
   Widget _otpScreen() => Scaffold(
     backgroundColor: VeyaColors.paper,
+    bottomNavigationBar: SafeArea(
+      top: false,
+      child: SizedBox(
+        height: 56,
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: VeyaColors.ink.withValues(alpha: .9),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x160F0322),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Image.asset(
+              'assets/branding/powered-by-minimoth.png',
+              width: 218,
+              semanticLabel: 'Powered by MiniMoth.dev',
+            ),
+          ),
+        ),
+      ),
+    ),
     body: TweenAnimationBuilder<double>(
       duration: const Duration(milliseconds: 260),
       curve: Curves.easeOutCubic,
@@ -704,29 +767,40 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     final selection = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => SafeArea(
+      // Flutter's route-level drag dismissal can leave inherited widgets
+      // attached on iOS. Keep the familiar handle, but dismiss explicitly.
+      enableDrag: false,
+      builder: (sheetContext) => SafeArea(
         child: SizedBox(
           height: 430,
-          child: ListView(
+          child: Column(
             children: [
-              const ListTile(
-                title: LText(
-                  'Country code',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+              _SheetDismissHandle(onDismiss: () => Navigator.pop(sheetContext)),
+              Expanded(
+                child: ListView(
+                  children: [
+                    const ListTile(
+                      title: LText(
+                        'Country code',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    for (final item in const [
+                      ('🇮🇳', 'India', '+91'),
+                      ('🇺🇸', 'United States', '+1'),
+                      ('🇩🇪', 'Germany', '+49'),
+                      ('🇨🇦', 'Canada', '+1'),
+                      ('🇦🇪', 'United Arab Emirates', '+971'),
+                    ])
+                      ListTile(
+                        leading: _CountryFlag(flag: item.$1),
+                        title: LText(item.$2),
+                        trailing: Text(item.$3),
+                        onTap: () => Navigator.pop(sheetContext, item.$3),
+                      ),
+                  ],
                 ),
               ),
-              for (final item in const [
-                ('🇮🇳 India', '+91'),
-                ('🇺🇸 United States', '+1'),
-                ('🇩🇪 Germany', '+49'),
-                ('🇨🇦 Canada', '+1'),
-                ('🇦🇪 United Arab Emirates', '+971'),
-              ])
-                ListTile(
-                  title: LText(item.$1),
-                  trailing: Text(item.$2),
-                  onTap: () => Navigator.pop(context, item.$2),
-                ),
             ],
           ),
         ),
@@ -768,10 +842,19 @@ class _OnboardingScreenState extends State<OnboardingScreen>
             'We’ll send a code to confirm this number.',
           ),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              OutlinedButton(
-                onPressed: busy ? null : countries,
-                child: Text('$dial ▾'),
+              SizedBox(
+                width: 76,
+                height: 56,
+                child: OutlinedButton(
+                  onPressed: busy ? null : countries,
+                  style: OutlinedButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size.fromHeight(56),
+                  ),
+                  child: Text('$dial ▾'),
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -785,8 +868,26 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   ],
                   decoration: InputDecoration(
                     labelText: t(context, 'Phone number'),
-                    errorText: error.isEmpty ? null : t(context, error),
-                    errorMaxLines: 4,
+                    labelStyle: error.isEmpty
+                        ? null
+                        : const TextStyle(color: Colors.redAccent),
+                    enabledBorder: error.isEmpty
+                        ? null
+                        : OutlineInputBorder(
+                            borderSide: const BorderSide(
+                              color: Colors.redAccent,
+                            ),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                    focusedBorder: error.isEmpty
+                        ? null
+                        : OutlineInputBorder(
+                            borderSide: const BorderSide(
+                              color: Colors.redAccent,
+                              width: 2,
+                            ),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
                   ),
                   onChanged: (_) {
                     setState(() => error = '');
@@ -798,6 +899,18 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ),
             ],
           ),
+          if (error.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 88, top: 8),
+              child: LText(
+                t(context, error),
+                style: const TextStyle(
+                  color: Colors.redAccent,
+                  fontSize: 12,
+                  height: 1.35,
+                ),
+              ),
+            ),
           const SizedBox(height: 18),
           const LText(
             'Your number is stored securely on this device and used only to verify your Veya profile.',
@@ -842,14 +955,40 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           tutorial(),
         ];
       case 4:
+        if (!AndroidBridge.assistantAvailable) {
+          return [
+            heading(
+              'You’re always in control.',
+              'Enable microphone access before you choose to dictate.',
+            ),
+            choice('Microphone', microphone, () async {
+              final granted = await MicrophonePermissions.request();
+              if (mounted) {
+                setState(() {
+                  microphone = granted;
+                  if (!granted) {
+                    error =
+                        'Microphone access can be enabled later in iPhone Settings.';
+                  } else {
+                    error = '';
+                  }
+                });
+              }
+            }, subtitle: 'Records only when you choose to speak.'),
+            const SizedBox(height: 18),
+            const LText(
+              'Veya never listens in the background. You can change microphone access anytime in iPhone Settings.',
+              style: TextStyle(color: VeyaColors.muted, height: 1.5),
+            ),
+          ];
+        }
         return [
           heading(
             'You’re always in control.',
             'Enable only what you want to use.',
           ),
           choice('Microphone', microphone, () async {
-            final granted =
-                await AndroidBridge.call<bool>('requestMicrophone') ?? false;
+            final granted = await MicrophonePermissions.request();
             if (mounted) {
               setState(() {
                 microphone = granted;
@@ -860,14 +999,12 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               });
             }
           }, subtitle: 'Records only when you choose to speak.'),
-          if (AndroidBridge.assistantAvailable)
-            choice(
-              'Floating assistant',
-              assistant,
-              openAccessibilitySetup,
-              subtitle:
-                  'Open Installed apps → Veya floating assistant → Enable.',
-            ),
+          choice(
+            'Floating assistant',
+            assistant,
+            openAccessibilitySetup,
+            subtitle: 'Open Installed apps → Veya floating assistant → Enable.',
+          ),
           const SizedBox(height: 18),
           const LText(
             'Accessibility finds text fields in chosen apps, excluding passwords. It reads the active field only when you tap Insert, and never presses Send. Disable it anytime in Android settings.',
@@ -931,38 +1068,23 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         ),
                       ),
                     Expanded(
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        switchInCurve: Curves.easeOutCubic,
-                        switchOutCurve: Curves.easeInCubic,
-                        transitionBuilder: (child, animation) => FadeTransition(
-                          opacity: animation,
-                          child: SlideTransition(
-                            position: Tween<Offset>(
-                              begin: const Offset(.025, 0),
-                              end: Offset.zero,
-                            ).animate(animation),
-                            child: child,
-                          ),
-                        ),
-                        child: KeyedSubtree(
-                          key: ValueKey('onboarding-content-$step'),
-                          child: ListView(
-                            padding: const EdgeInsets.all(24),
-                            children: [
-                              ...content(),
-                              if (error.isNotEmpty && step != 1 && step != 2)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 16),
-                                  child: LText(
-                                    error,
-                                    style: const TextStyle(
-                                      color: Colors.redAccent,
-                                    ),
+                      child: KeyedSubtree(
+                        key: ValueKey('onboarding-content-$step'),
+                        child: ListView(
+                          padding: const EdgeInsets.all(24),
+                          children: [
+                            ...content(),
+                            if (error.isNotEmpty && step != 1 && step != 2)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 16),
+                                child: LText(
+                                  error,
+                                  style: const TextStyle(
+                                    color: Colors.redAccent,
                                   ),
                                 ),
-                            ],
-                          ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
@@ -1012,6 +1134,183 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       ),
     );
   }
+}
+
+class _SheetDismissHandle extends StatelessWidget {
+  final VoidCallback onDismiss;
+  const _SheetDismissHandle({required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onVerticalDragEnd: (details) {
+      if ((details.primaryVelocity ?? 0) > 0) onDismiss();
+    },
+    child: SizedBox(
+      height: 34,
+      width: double.infinity,
+      child: Center(
+        child: Container(
+          width: 34,
+          height: 4,
+          decoration: BoxDecoration(
+            color: VeyaColors.muted.withValues(alpha: .55),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _CountryFlag extends StatelessWidget {
+  final String flag;
+  const _CountryFlag({required this.flag});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 28,
+    height: 20,
+    child: CustomPaint(painter: _CountryFlagPainter(flag)),
+  );
+}
+
+class _CountryFlagPainter extends CustomPainter {
+  final String flag;
+  const _CountryFlagPainter(this.flag);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final clip = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      const Radius.circular(3),
+    );
+    canvas.save();
+    canvas.clipRRect(clip);
+    final paint = Paint();
+    void fill(Color color, Rect rect) {
+      paint.color = color;
+      canvas.drawRect(rect, paint);
+    }
+
+    switch (flag) {
+      case '🇮🇳':
+        fill(
+          const Color(0xFFFF9933),
+          Rect.fromLTWH(0, 0, size.width, size.height / 3),
+        );
+        fill(
+          Colors.white,
+          Rect.fromLTWH(0, size.height / 3, size.width, size.height / 3),
+        );
+        fill(
+          const Color(0xFF138808),
+          Rect.fromLTWH(0, size.height * 2 / 3, size.width, size.height / 3),
+        );
+        paint
+          ..color = const Color(0xFF000080)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2;
+        canvas.drawCircle(Offset(size.width / 2, size.height / 2), 3, paint);
+        break;
+      case '🇺🇸':
+        for (var index = 0; index < 7; index++) {
+          fill(
+            index.isEven ? const Color(0xFFB22234) : Colors.white,
+            Rect.fromLTWH(
+              0,
+              index * size.height / 7,
+              size.width,
+              size.height / 7,
+            ),
+          );
+        }
+        fill(
+          const Color(0xFF3C3B6E),
+          Rect.fromLTWH(0, 0, size.width * .45, size.height * .54),
+        );
+        break;
+      case '🇩🇪':
+        fill(Colors.black, Rect.fromLTWH(0, 0, size.width, size.height / 3));
+        fill(
+          const Color(0xFFDD0000),
+          Rect.fromLTWH(0, size.height / 3, size.width, size.height / 3),
+        );
+        fill(
+          const Color(0xFFFFCE00),
+          Rect.fromLTWH(0, size.height * 2 / 3, size.width, size.height / 3),
+        );
+        break;
+      case '🇨🇦':
+        fill(
+          const Color(0xFFEF2B2D),
+          Rect.fromLTWH(0, 0, size.width * .26, size.height),
+        );
+        fill(
+          Colors.white,
+          Rect.fromLTWH(size.width * .26, 0, size.width * .48, size.height),
+        );
+        fill(
+          const Color(0xFFEF2B2D),
+          Rect.fromLTWH(size.width * .74, 0, size.width * .26, size.height),
+        );
+        paint.color = const Color(0xFFEF2B2D);
+        canvas.drawPath(
+          Path()
+            ..moveTo(size.width / 2, 3)
+            ..lineTo(size.width * .56, size.height * .43)
+            ..lineTo(size.width * .67, size.height * .38)
+            ..lineTo(size.width * .57, size.height * .57)
+            ..lineTo(size.width * .62, size.height * .7)
+            ..lineTo(size.width / 2, size.height - 2)
+            ..lineTo(size.width * .38, size.height * .7)
+            ..lineTo(size.width * .43, size.height * .57)
+            ..lineTo(size.width * .33, size.height * .38)
+            ..lineTo(size.width * .44, size.height * .43)
+            ..close(),
+          paint,
+        );
+        break;
+      case '🇦🇪':
+        fill(
+          const Color(0xFFEF3340),
+          Rect.fromLTWH(0, 0, size.width * .25, size.height),
+        );
+        fill(
+          const Color(0xFF009739),
+          Rect.fromLTWH(size.width * .25, 0, size.width * .75, size.height / 3),
+        );
+        fill(
+          Colors.white,
+          Rect.fromLTWH(
+            size.width * .25,
+            size.height / 3,
+            size.width * .75,
+            size.height / 3,
+          ),
+        );
+        fill(
+          Colors.black,
+          Rect.fromLTWH(
+            size.width * .25,
+            size.height * 2 / 3,
+            size.width * .75,
+            size.height / 3,
+          ),
+        );
+        break;
+    }
+    canvas.restore();
+    paint
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = .7
+      ..color = const Color(0x220F0322);
+    canvas.drawRRect(clip, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CountryFlagPainter oldDelegate) =>
+      oldDelegate.flag != flag;
 }
 
 class _OtpArtwork extends CustomPainter {

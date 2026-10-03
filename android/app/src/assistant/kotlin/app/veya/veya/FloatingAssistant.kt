@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.util.Base64
 import android.util.Log
 import android.hardware.*
 import android.os.*
@@ -22,6 +23,7 @@ import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import kotlin.math.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -39,9 +41,15 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   var instance: FloatingAssistant? = null
   private const val SILENCE_TIMEOUT_MS = 20_000L
   private const val VOICE_ACTIVITY_THRESHOLD = 900
+  // Firebase ID tokens are valid for one hour. Refresh before the boundary so
+  // the assistant never has to interrupt a recording to recover a session.
+  private const val TOKEN_REFRESH_INTERVAL_MINUTES = 55L
+  private const val CACHED_TOKEN_MIN_VALIDITY_MS = 30_000L
  }
  private val main = Handler(Looper.getMainLooper())
  private val worker = Executors.newSingleThreadExecutor()
+ private val tokenWorker = Executors.newSingleThreadScheduledExecutor()
+ private var tokenRefreshTask: ScheduledFuture<*>? = null
  private val httpClient by lazy {
   OkHttpClient.Builder()
    .connectTimeout(15, TimeUnit.SECONDS)
@@ -133,6 +141,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   instance = this
   sensor = getSystemService(SENSOR_SERVICE) as SensorManager
   sensor?.registerListener(this, sensor?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), SensorManager.SENSOR_DELAY_UI)
+  startTokenMaintenance()
   refresh()
   if (prefs.getBoolean("returnToVeyaAfterAccessibility", false)) {
    prefs.edit().remove("returnToVeyaAfterAccessibility").apply()
@@ -175,6 +184,8 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  }
  override fun onInterrupt() { cancel(); remove() }
  override fun onDestroy() {
+  tokenRefreshTask?.cancel(false)
+  tokenWorker.shutdownNow()
   sensor?.unregisterListener(this); cancel(); remove(); worker.shutdownNow(); streamWorker.shutdownNow(); instance = null
   if (prefs.getBoolean("returnToVeyaAfterDisable", false)) {
    prefs.edit().remove("returnToVeyaAfterDisable").apply()
@@ -801,10 +812,56 @@ private fun cancel() {
    Tasks.await(user.getIdToken(forceRefresh),20,TimeUnit.SECONDS).token
   }.getOrNull()
   if(!refreshed.isNullOrBlank()) prefs.edit().putString("firebaseIdToken",refreshed).apply()
-  return refreshed ?: prefs.getString("firebaseIdToken","")?.takeIf { it.isNotBlank() }
+  // Never retry a gateway request with a locally cached token after it has
+  // expired. That was the source of the visible “invalid token” error when a
+  // Firebase refresh briefly failed at the one-hour boundary.
+  return refreshed ?: cachedFirebaseToken()
  }
- private fun cachedFirebaseToken(): String? =
-  prefs.getString("firebaseIdToken", "")?.takeIf { it.isNotBlank() }
+ private fun cachedFirebaseToken(): String? {
+  val token = prefs.getString("firebaseIdToken", "")?.takeIf { it.isNotBlank() } ?: return null
+  return runCatching {
+   val parts = token.split('.')
+   if (parts.size != 3) return@runCatching null
+   val payload = String(
+    Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+    Charsets.UTF_8,
+   )
+   val expiresAtMillis = JSONObject(payload).optLong("exp", 0L) * 1_000L
+   token.takeIf { expiresAtMillis > System.currentTimeMillis() + CACHED_TOKEN_MIN_VALIDITY_MS }
+  }.getOrNull()
+ }
+
+ /** Called from Flutter configuration and by the active accessibility service. */
+ fun requestSilentTokenRefresh() {
+  if (!tokenWorker.isShutdown) tokenWorker.execute { refreshFirebaseTokenSilently() }
+ }
+
+ private fun startTokenMaintenance() {
+  tokenRefreshTask?.cancel(false)
+  requestSilentTokenRefresh()
+  tokenRefreshTask = tokenWorker.scheduleAtFixedRate(
+   { refreshFirebaseTokenSilently() },
+   TOKEN_REFRESH_INTERVAL_MINUTES,
+   TOKEN_REFRESH_INTERVAL_MINUTES,
+   TimeUnit.MINUTES,
+  )
+ }
+
+ private fun refreshFirebaseTokenSilently() {
+  val user = FirebaseAuth.getInstance().currentUser ?: return
+  val token = runCatching {
+   Tasks.await(user.getIdToken(true), 20, TimeUnit.SECONDS).token
+  }.onFailure {
+   // This is intentionally non-blocking and has no UI effect. The existing
+   // request-time forced refresh remains the recovery path for transient loss
+   // of connectivity.
+   Log.w("VeyaAssistant", "Silent Firebase token refresh failed", it)
+  }.getOrNull()
+  if (!token.isNullOrBlank()) {
+   prefs.edit().putString("firebaseIdToken", token).apply()
+   Log.d("VeyaAssistant", "Firebase ID token refreshed silently")
+  }
+ }
  private fun postJson(url: String, body: JSONObject): JSONObject {
   // Style text is safe JSON. The normal endpoint avoids edge WAF rejection of
   // opaque payloads before they reach the authenticated Cloud Run service.

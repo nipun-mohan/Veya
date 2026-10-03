@@ -1,2 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources><color name="transparent">#00000000</color></resources>
+<resources>
+    <color name="transparent">#00000000</color>
+    <!-- Compatibility resources referenced by the Google Wallet manifest merger. -->
+    <color name="wallet_primary_text_holo_light">#DE000000</color>
+    <color name="wallet_secondary_text_holo_dark">#B3FFFFFF</color>
+</resources>

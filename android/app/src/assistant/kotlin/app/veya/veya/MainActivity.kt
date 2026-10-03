@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Base64
@@ -20,6 +22,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.security.MessageDigest
+import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterActivity() {
  private var permissionResult: MethodChannel.Result? = null
@@ -42,7 +45,10 @@ class MainActivity : FlutterActivity() {
      edit.putFloat("floatingIconScale", (args["floatingIconScale"] as? Number)?.toFloat() ?: 1f)
      edit.putFloat("floatingIconOpacity", (args["floatingIconOpacity"] as? Number)?.toFloat() ?: .9f)
      edit.putStringSet("allowedApps", (args["allowedApps"] as? List<*>)?.map { it.toString() }?.toSet() ?: emptySet())
-     edit.apply(); FloatingAssistant.instance?.refresh(); result.success(null)
+     edit.apply()
+     FloatingAssistant.instance?.requestSilentTokenRefresh()
+     FloatingAssistant.instance?.refresh()
+     result.success(null)
     }
     "isEnabled" -> result.success(isAccessibilityEnabled())
     "isMicrophoneGranted" -> result.success(
@@ -65,6 +71,24 @@ class MainActivity : FlutterActivity() {
     "startOtpListener" -> startOtpListener(result)
     "stopOtpListener" -> { stopOtpListener(); result.success(null) }
     "showBubble" -> { FloatingAssistant.instance?.restore(); result.success(null) }
+    "launchUpiIntent" -> {
+     val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+     val raw = args["intentUrl"]?.toString()
+     val packageId = args["packageName"]?.toString()
+     if (raw.isNullOrBlank() || packageId.isNullOrBlank()) { result.success(false); return@setMethodCallHandler }
+     val launched = runCatching {
+      val intent = Intent.parseUri(raw, Intent.URI_INTENT_SCHEME).apply {
+       addCategory(Intent.CATEGORY_BROWSABLE)
+       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+       // Cashfree returns HTTPS app links. Pinning the selected installed UPI
+       // package prevents Android from handing the link to a web browser.
+       setPackage(packageId)
+      }
+      if (intent.resolveActivity(packageManager) == null) false
+      else { startActivity(intent); true }
+     }.getOrDefault(false)
+     result.success(launched)
+    }
     "installedApps" -> {
      Thread {
       val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -76,9 +100,44 @@ class MainActivity : FlutterActivity() {
       runOnUiThread { result.success(apps) }
      }.start()
     }
+    "installedUpiApps" -> {
+     Thread {
+      val supported = linkedMapOf(
+       "com.phonepe.app" to "PhonePe",
+       "com.google.android.apps.nbu.paisa.user" to "Google Pay",
+       "net.one97.paytm" to "Paytm",
+       "com.dreamplug.androidapp" to "CRED",
+       "in.amazon.mShop.android.shopping" to "Amazon Pay",
+       "in.org.npci.upiapp" to "BHIM",
+       "com.supermoney.app" to "SuperMoney"
+      )
+      val apps = supported.mapNotNull { (packageId, fallbackName) ->
+       runCatching {
+        val info = packageManager.getApplicationInfo(packageId, 0)
+        mapOf(
+         "package" to packageId,
+         "name" to packageManager.getApplicationLabel(info).toString().ifBlank { fallbackName },
+         "icon" to appIconDataUri(info)
+        )
+       }.getOrNull()
+      }
+      runOnUiThread { result.success(apps) }
+     }.start()
+    }
     else -> result.notImplemented()
    }
   }
+ }
+
+ private fun appIconDataUri(info: android.content.pm.ApplicationInfo): String {
+  val size = (48 * resources.displayMetrics.density).toInt()
+  val drawable = packageManager.getApplicationIcon(info)
+  val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+  drawable.setBounds(0, 0, size, size)
+  drawable.draw(Canvas(bitmap))
+  val bytes = ByteArrayOutputStream()
+  bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)
+  return Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)
  }
 
  private fun openAccessibilitySettings() {

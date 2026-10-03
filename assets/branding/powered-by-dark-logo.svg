@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 290 28" width="290" height="28" role="img" aria-label="Powered by MiniMoth.dev">
+  <!-- saffron-tinted tile for consistency with the light variant -->
+  <rect x="2" y="1" width="26" height="26" rx="5" fill="rgba(234,166,79,0.15)"/>
+  <svg x="2" y="1" width="26" height="26" viewBox="0 0 100 100" fill="none">
+    <line x1="50" y1="34" x2="40" y2="16" stroke="#eaa64f" stroke-width="2" stroke-linecap="round"/>
+    <line x1="50" y1="34" x2="60" y2="16" stroke="#eaa64f" stroke-width="2" stroke-linecap="round"/>
+    <line x1="50" y1="32" x2="50" y2="78" stroke="#eaa64f" stroke-width="2.4" stroke-linecap="round"/>
+    <polygon points="50,36 16,30 26,54 50,52" fill="rgba(234,166,79,0.16)" stroke="#eaa64f" stroke-width="2" stroke-linejoin="round"/>
+    <polygon points="50,36 84,30 74,54 50,52" fill="rgba(234,166,79,0.16)" stroke="#eaa64f" stroke-width="2" stroke-linejoin="round"/>
+    <polygon points="50,54 30,60 36,80 50,74" fill="rgba(234,166,79,0.08)" stroke="#c98b46" stroke-width="2" stroke-linejoin="round"/>
+    <polygon points="50,54 70,60 64,80 50,74" fill="rgba(234,166,79,0.08)" stroke="#c98b46" stroke-width="2" stroke-linejoin="round"/>
+  </svg>
+  <text x="34" y="20" font-family="Space Grotesk, Helvetica Neue, Arial, sans-serif" font-size="20" font-weight="500" fill="#a89f93">Powered by</text>
+  <text x="150" y="20" font-family="Space Grotesk, Helvetica Neue, Arial, sans-serif" font-size="20" font-weight="700" fill="#f0ede7">MiniMoth</text>
+  <text x="240" y="20" font-family="Space Grotesk, Helvetica Neue, Arial, sans-serif" font-size="20" font-weight="600" fill="#c98b46">.dev</text>
+</svg>

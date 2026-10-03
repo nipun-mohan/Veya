@@ -237,82 +237,180 @@ Future<void> copyText(BuildContext context, String text) async {
 
 Future<void> chooseLanguage(BuildContext context, VeyaStore store) async {
   final search = TextEditingController();
-  await showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    builder: (context) => StatefulBuilder(
-      builder: (context, setSheetState) {
-        final query = search.text.trim().toLowerCase();
-        final filtered = languages.where((language) {
-          return query.isEmpty ||
-              language.name.toLowerCase().contains(query) ||
-              language.native.toLowerCase().contains(query);
-        }).toList();
-        return SafeArea(
-          child: SizedBox(
-            height: 570,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
-                  child: LText(
-                    'Think in your language.',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+  final query = ValueNotifier<String>('');
+  final animation = AnimationController(
+    vsync: Navigator.of(context),
+    duration: const Duration(milliseconds: 240),
+    reverseDuration: const Duration(milliseconds: 190),
+  );
+  final animationCurve = CurvedAnimation(
+    parent: animation,
+    curve: Curves.easeOutCubic,
+    reverseCurve: Curves.easeInCubic,
+  );
+  OverlayEntry? entry;
+  var closed = false;
+
+  Future<void> close() async {
+    if (closed) return;
+    closed = true;
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future.wait([
+      animation.reverse(),
+      Future<void>.delayed(const Duration(milliseconds: 180)),
+    ]);
+    entry?.remove();
+    animation.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      search.dispose();
+      query.dispose();
+    });
+  }
+
+  final sheet = Align(
+    alignment: Alignment.bottomCenter,
+    child: SafeArea(
+      top: false,
+      bottom: false,
+      child: Material(
+        color: VeyaColors.paper,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          width: double.infinity,
+          height: 570,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _LanguageSheetDismissHandle(onDismiss: close),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+                child: LText(
+                  'Think in your language.',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: LText(
+                  'Choose the language you’ll speak.',
+                  style: TextStyle(color: VeyaColors.muted),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
+                child: TextField(
+                  controller: search,
+                  onChanged: (value) => query.value = value,
+                  decoration: const InputDecoration(
+                    hintText: 'Search languages',
+                    prefixIcon: Icon(Icons.search),
                   ),
                 ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 24),
-                  child: LText(
-                    'Choose the language you’ll speak.',
-                    style: TextStyle(color: VeyaColors.muted),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
-                  child: TextField(
-                    controller: search,
-                    onChanged: (_) => setSheetState(() {}),
-                    decoration: const InputDecoration(
-                      hintText: 'Search languages',
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: ListView(
-                    children: filtered
-                        .map(
-                          (l) => ListTile(
+              ),
+              Expanded(
+                child: ValueListenableBuilder<String>(
+                  valueListenable: query,
+                  builder: (_, value, __) {
+                    final normalized = value.trim().toLowerCase();
+                    final filtered = languages.where((language) {
+                      return normalized.isEmpty ||
+                          language.name.toLowerCase().contains(normalized) ||
+                          language.native.toLowerCase().contains(normalized);
+                    });
+                    return ListView(
+                      padding: EdgeInsets.zero,
+                      children: [
+                        for (final language in filtered)
+                          ListTile(
                             contentPadding: const EdgeInsets.symmetric(
                               horizontal: 24,
                             ),
-                            title: LText(l.name),
-                            subtitle: LText(l.native),
-                            trailing: store.language == l.code
+                            title: LText(language.name),
+                            subtitle: LText(language.native),
+                            trailing: store.language == language.code
                                 ? const Icon(
                                     Icons.check_circle,
                                     color: VeyaColors.teal,
                                   )
                                 : null,
                             onTap: () async {
-                              store.language = l.code;
+                              await close();
+                              store.language = language.code;
                               await store.persist();
-                              if (context.mounted) Navigator.pop(context);
                             },
                           ),
-                        )
-                        .toList(),
-                  ),
+                      ],
+                    );
+                  },
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     ),
   );
-  search.dispose();
+
+  entry = OverlayEntry(
+    builder: (_) => AnimatedBuilder(
+      animation: animationCurve,
+      builder: (_, __) => Material(
+        color: Colors.transparent,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Opacity(
+                opacity: animationCurve.value,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: close,
+                  child: const ColoredBox(color: Color(0x88000000)),
+                ),
+              ),
+            ),
+            Transform.translate(
+              offset: Offset(0, (1 - animationCurve.value) * 620),
+              child: sheet,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+  Overlay.of(context, rootOverlay: true).insert(entry);
+  animation.forward();
+}
+
+class _LanguageSheetDismissHandle extends StatelessWidget {
+  const _LanguageSheetDismissHandle({required this.onDismiss});
+
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: 'Close language selection',
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onDismiss,
+      onVerticalDragEnd: (_) => onDismiss(),
+      child: SizedBox(
+        height: 28,
+        width: double.infinity,
+        child: Center(
+          child: Container(
+            height: 4,
+            width: 42,
+            decoration: BoxDecoration(
+              color: VeyaColors.line,
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class SectionTitle extends StatelessWidget {
@@ -335,11 +433,15 @@ Future<void> chooseAppLanguage(BuildContext context, VeyaStore store) async {
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
+    enableDrag: false,
     builder: (context) => SafeArea(
       child: SizedBox(
         height: 570,
         child: Column(
           children: [
+            _LanguageSheetDismissHandle(
+              onDismiss: () => Navigator.pop(context),
+            ),
             const ListTile(
               title: LText('App language'),
               subtitle: LText('Change the language of menus and buttons.'),

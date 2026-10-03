@@ -64,3 +64,31 @@ export to a BigQuery dataset and set `VEYA_BILLING_DATASET` to that dataset's
 name. The export is daily, so the first table can take around 24 hours to
 appear. The Cloud Run runtime needs BigQuery Data Viewer on that dataset and
 BigQuery Job User on the project.
+
+## Subscription foundation
+
+Veya stores one subscription entitlement document per Firebase user in Cloud
+Firestore. Enable **Cloud Firestore (Native mode)** in the same Google Cloud
+project before deploying the subscription endpoints. Give the Cloud Run runtime
+service account **Cloud Datastore User** so it can read and write the
+`veya_subscriptions` collection.
+
+The ₹9 five-day trial begins only after Cashfree confirms its payment. The
+monthly renewal price is ₹129. Subscription state is informational during this
+rollout: no voice, translation, assistant, or insertion feature is restricted.
+
+Cashfree keys belong only in Secret Manager:
+
+```text
+CASHFREE_ENVIRONMENT=sandbox
+CASHFREE_CLIENT_ID=<Cashfree app id>
+CASHFREE_CLIENT_SECRET=<Cashfree secret>
+CASHFREE_TRIAL_PRICE_INR=9
+CASHFREE_MONTHLY_PRICE_INR=129
+```
+
+Do not deploy the Cashfree checkout until the Cashfree merchant account has
+Subscriptions/UPI AutoPay activated and a monthly price has been approved. For
+the Google Play-distributed app, enroll in Google Play's India alternative
+billing program and present the required billing choice before offering a
+Cashfree subscription in-app.

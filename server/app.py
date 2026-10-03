@@ -1,6 +1,7 @@
 """Veya's Sarvam-only speech and writing gateway."""
 import asyncio
 import base64
+import html
 import hmac
 import json
 import os
@@ -16,11 +17,16 @@ import firebase_admin
 from firebase_admin import auth as firebase_auth
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from server.costs import CloudBillingCosts
 from server.dashboard import DASHBOARD_HTML, GatewayMetrics, SUBSCRIPTIONS
 from server.privacy import PRIVACY_POLICY_HTML
+from server.subscriptions import (
+    SubscriptionStore, cashfree_configuration, create_cashfree_subscription,
+    create_cashfree_upi_authorization, fetch_cashfree_subscription,
+)
+from server.minimoth import send_otp as minimoth_send_otp, verify_otp as minimoth_verify_otp
 
 load_dotenv(Path(__file__).with_name('.env'))
 
@@ -84,6 +90,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.metrics = GatewayMetrics()
     app.state.cloud_costs = CloudBillingCosts()
+    app.state.subscriptions = SubscriptionStore()
     yield
     await app.state.sarvam_client.aclose()
 
@@ -127,6 +134,138 @@ def verified_firebase_socket(websocket: WebSocket) -> dict[str, object]:
     except Exception as error:
         print(f'Firebase streaming token rejected: {error!r}', flush=True)
         raise HTTPException(401, 'Your session has expired. Please verify your number again.')
+
+
+class OtpSendRequest(BaseModel):
+    phone: str = Field(pattern=r'^\+[1-9]\d{7,14}$')
+
+
+class OtpVerifyRequest(OtpSendRequest):
+    code: str = Field(pattern=r'^\d{6}$')
+
+
+def firebase_user_for_verified_phone(phone: str) -> str:
+    """Use the old Firebase phone user when it exists, preserving app data."""
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app()
+    try:
+        return firebase_auth.get_user_by_phone_number(phone).uid
+    except firebase_auth.UserNotFoundError:
+        # Firebase phone auth uses this phone format as the durable identity.
+        # The custom token is issued only after MiniMoth has verified control.
+        return firebase_auth.create_user(phone_number=phone).uid
+
+
+@app.post('/v1/auth/otp/send')
+async def send_phone_otp(body: OtpSendRequest, request: Request):
+    """Start MiniMoth WhatsApp-first OTP delivery without exposing its key."""
+    try:
+        result = await minimoth_send_otp(request.app.state.sarvam_client, body.phone)
+        return {
+            'otp_id': result.get('otp_id'),
+            'expires_at': result.get('expires_at'),
+        }
+    except ValueError as error:
+        # MiniMoth supplies stable public error codes such as OTP_RATE_LIMITED.
+        message = str(error)
+        status = 429 if message in {'OTP_RATE_LIMITED', 'VERIFY_RATE_LIMITED'} else 400
+        raise HTTPException(status, message)
+    except RuntimeError as error:
+        print(f'MiniMoth send unavailable: {error!r}', flush=True)
+        raise HTTPException(503, 'Verification is temporarily unavailable.')
+
+
+@app.post('/v1/auth/otp/verify')
+async def verify_phone_otp(body: OtpVerifyRequest, request: Request):
+    """Verify with MiniMoth then issue Firebase custom auth for Veya services."""
+    try:
+        result = await minimoth_verify_otp(
+            request.app.state.sarvam_client, body.phone, body.code,
+        )
+        uid = firebase_user_for_verified_phone(body.phone)
+        custom_token = firebase_auth.create_custom_token(uid).decode('utf-8')
+        return {'firebase_custom_token': custom_token, 'identity_id': result.get('identity_id')}
+    except ValueError as error:
+        message = str(error)
+        status = 429 if message == 'VERIFY_RATE_LIMITED' else 400
+        raise HTTPException(status, message)
+    except RuntimeError as error:
+        print(f'MiniMoth verification unavailable: {error!r}', flush=True)
+        raise HTTPException(503, 'Verification is temporarily unavailable.')
+
+
+@app.get('/v1/subscription')
+async def subscription_status(request: Request):
+    """Return the authenticated user's server-side trial/entitlement state.
+
+    A new user is marked ready to start a paid trial. The five-day trial starts
+    only after Cashfree confirms the ₹9 introductory payment. The result is
+    informational during rollout; no Veya feature uses it for access control.
+    """
+    identity = verified_firebase_user(request)
+    uid = str(identity['uid'])
+    phone = identity.get('phone_number')
+    try:
+        return request.app.state.subscriptions.entitlement_for(
+            uid, str(phone) if phone else None,
+        )
+    except Exception as error:
+        print(f'Subscription store unavailable: {error!r}', flush=True)
+        raise HTTPException(503, 'Subscription service is temporarily unavailable.')
+
+
+@app.get('/v1/subscription/payment-configuration')
+async def subscription_payment_configuration(request: Request):
+    """Return safe Cashfree readiness metadata; keys remain server-only."""
+    verified_firebase_user(request)
+    return cashfree_configuration()
+
+
+@app.post('/v1/subscription/checkout')
+async def subscription_checkout(request: Request):
+    """Create a Cashfree subscription checkout session for the signed-in user."""
+    identity = verified_firebase_user(request)
+    uid = str(identity['uid'])
+    phone = identity.get('phone_number')
+    email = identity.get('email')
+    try:
+        checkout = await create_cashfree_subscription(
+            uid, str(phone) if phone else None, str(email) if email else None,
+        )
+        authorization = await create_cashfree_upi_authorization(
+            checkout['subscription_id'], checkout['subscription_session_id'],
+        )
+        request.app.state.subscriptions.record_checkout(uid, checkout['subscription_id'])
+        return authorization
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    except RuntimeError as error:
+        print(f'Cashfree checkout unavailable: {error!r}', flush=True)
+        raise HTTPException(503, 'Payment service is temporarily unavailable.')
+
+
+@app.post('/v1/subscription/verify')
+async def subscription_verify(request: Request):
+    """Verify a Cashfree callback with the provider before updating Firestore."""
+    identity = verified_firebase_user(request)
+    uid = str(identity['uid'])
+    try:
+        body = await request.json()
+        subscription_id = str(body.get('subscription_id') or '')
+        if not subscription_id:
+            raise HTTPException(400, 'A subscription ID is required.')
+        if not request.app.state.subscriptions.owns_subscription(uid, subscription_id):
+            raise HTTPException(403, 'This subscription does not belong to the current user.')
+        payload = await fetch_cashfree_subscription(subscription_id)
+        request.app.state.subscriptions.record_cashfree_status(uid, payload)
+        return request.app.state.subscriptions.entitlement_for(
+            uid, str(identity.get('phone_number') or '') or None,
+        )
+    except HTTPException:
+        raise
+    except RuntimeError as error:
+        print(f'Cashfree subscription verification unavailable: {error!r}', flush=True)
+        raise HTTPException(503, 'Payment verification is temporarily unavailable.')
 
 
 class TranslateRequest(BaseModel):
@@ -505,6 +644,36 @@ def health():
 def privacy_policy():
     """Public, stable privacy-policy URL for the app and Play Console."""
     return PRIVACY_POLICY_HTML
+
+
+@app.get('/.well-known/assetlinks.json', include_in_schema=False)
+def android_asset_links():
+    """Authorize Veya to receive Cashfree's HTTPS subscription return link."""
+    return JSONResponse([{
+        'relation': ['delegate_permission/common.handle_all_urls'],
+        'target': {
+            'namespace': 'android_app',
+            'package_name': 'app.veya.veya',
+            'sha256_cert_fingerprints': [
+                '98:7C:6D:22:CF:8E:FB:5D:D9:91:07:03:96:EB:7E:66:74:D8:A6:BE:F8:74:16:F2:BA:6B:8E:19:6D:BD:68:84',
+            ],
+        },
+    }])
+
+
+@app.get('/subscription/return', response_class=HTMLResponse, include_in_schema=False)
+def subscription_return(request: Request):
+    """Fallback for browsers that cannot hand the verified return URL to Veya."""
+    query = request.url.query
+    target = f'veya://subscription/return?{query}' if query else 'veya://subscription/return'
+    safe_target = html.escape(target, quote=True)
+    return HTMLResponse(
+        f'''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Return to Veya</title></head><body style="font-family:sans-serif;padding:32px">
+        <h2>Returning to Veya…</h2><p>If Veya does not open automatically, tap below.</p>
+        <p><a href="{safe_target}">Open Veya</a></p><script>location.replace({json.dumps(target)});</script>
+        </body></html>''',
+    )
 
 
 @app.get('/internal/dashboard', response_class=HTMLResponse, include_in_schema=False)

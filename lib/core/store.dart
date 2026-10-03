@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 import 'phone_profile.dart';
 import 'platform.dart';
+import 'subscription.dart';
 
 class VeyaStore extends ChangeNotifier {
   final SharedPreferences prefs;
@@ -21,6 +22,8 @@ class VeyaStore extends ChangeNotifier {
   double floatingIconScale = 1, floatingIconOpacity = .9;
   bool onboarded = false;
   bool accessibilityConsentAccepted = false;
+  SubscriptionStatus? subscription;
+  bool subscriptionLoading = false;
   List<String> allowedApps = [
     'com.whatsapp',
     'com.google.android.gm',
@@ -83,6 +86,7 @@ class VeyaStore extends ChangeNotifier {
         .toDouble();
     allowedApps = prefs.getStringList('allowedApps') ?? allowedApps;
     await syncNative();
+    await refreshSubscription();
     notifyListeners();
   }
 
@@ -107,7 +111,16 @@ class VeyaStore extends ChangeNotifier {
 
   Future<void> syncNative() async {
     final user = FirebaseAuth.instance.currentUser;
-    final refreshedToken = user == null ? null : await user.getIdToken(true);
+    String? refreshedToken;
+    if (user != null) {
+      // Native configuration must never prevent the app from completing
+      // onboarding. The assistant performs its own silent refresh on Android.
+      try {
+        refreshedToken = await user.getIdToken(true);
+      } catch (_) {
+        refreshedToken = null;
+      }
+    }
     if (refreshedToken != null && refreshedToken.isNotEmpty) {
       await secure.write(key: 'veya_firebase_id_token', value: refreshedToken);
     }
@@ -123,6 +136,28 @@ class VeyaStore extends ChangeNotifier {
           await secure.read(key: 'veya_firebase_id_token') ??
           '',
     });
+  }
+
+  /// Subscription is informational during the rollout. A failure must never
+  /// interrupt the assistant, onboarding, or translation experience.
+  Future<void> refreshSubscription() async {
+    if (FirebaseAuth.instance.currentUser == null || endpoint.isEmpty) return;
+    subscriptionLoading = true;
+    notifyListeners();
+    try {
+      subscription = await SubscriptionApi(endpoint).status();
+    } catch (_) {
+      // Firestore is enabled with the payment rollout. Until then the app
+      // remains fully usable and simply omits the account status card.
+    } finally {
+      subscriptionLoading = false;
+      notifyListeners();
+    }
+  }
+
+  void applySubscription(SubscriptionStatus value) {
+    subscription = value;
+    notifyListeners();
   }
 
   Future<void> setUiLanguage(String code, {bool setSpeaking = false}) async {
@@ -185,4 +220,35 @@ class VeyaStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Clears account-specific state while preserving device preferences such as
+  /// language and the selected translation service.
+  Future<void> logout() async {
+    await FirebaseAuth.instance.signOut();
+    await Future.wait([
+      prefs.setBool('onboarded', false),
+      prefs.remove('profile_setup_step'),
+      prefs.remove('phoneOtpVerified'),
+      prefs.remove('profileName'),
+      secure.delete(key: 'veya_firebase_id_token'),
+      secure.delete(key: 'veya_firebase_uid'),
+      secure.delete(key: 'veya_profile_phone'),
+      secure.delete(key: 'veya_account_session'),
+      secure.delete(key: 'veya_account_phone'),
+    ]);
+    profileName = '';
+    phoneCountryCode = '+91';
+    phoneNationalNumber = '';
+    subscription = null;
+    // Clear the native assistant's cached credential as well.
+    await AndroidBridge.call('configure', {
+      'endpoint': endpoint,
+      'language': language,
+      'uiLanguage': uiLanguage,
+      'allowedApps': const <String>[],
+      'floatingIconScale': floatingIconScale,
+      'floatingIconOpacity': floatingIconOpacity,
+      'firebaseIdToken': '',
+    });
+    notifyListeners();
+  }
 }

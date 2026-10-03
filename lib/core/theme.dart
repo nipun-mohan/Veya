@@ -100,7 +100,9 @@ ThemeData veyaTheme() {
     ),
     bottomSheetTheme: const BottomSheetThemeData(
       backgroundColor: VeyaColors.paper,
-      showDragHandle: true,
+      // Each sheet supplies its own controlled close action. Flutter's
+      // framework drag handle can race inherited-widget disposal on iOS.
+      showDragHandle: false,
     ),
     navigationBarTheme: const NavigationBarThemeData(
       backgroundColor: Colors.white,

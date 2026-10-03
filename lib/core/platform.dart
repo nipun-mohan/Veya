@@ -16,4 +16,56 @@ class AndroidBridge {
     if (!assistantAvailable) return null;
     return channel.invokeMethod<T>(method, arguments);
   }
+
+  static Future<bool> launchUpiIntent(
+    String intentUrl,
+    String packageName,
+  ) async {
+    if (!assistantAvailable) return false;
+    return await call<bool>('launchUpiIntent', {
+          'intentUrl': intentUrl,
+          'packageName': packageName,
+        }) ??
+        false;
+  }
+
+  static Future<List<Map<String, String>>> installedUpiApps() async {
+    if (!assistantAvailable) return const [];
+    final raw = await call<List<dynamic>>('installedUpiApps');
+    return (raw ?? const [])
+        .whereType<Map>()
+        .map(
+          (app) => app.map(
+            (key, value) => MapEntry(key.toString(), value.toString()),
+          ),
+        )
+        .toList();
+  }
+}
+
+/// Requests microphone access on platforms that can record inside Veya.
+/// Android uses the assistant bridge; iOS uses its own small native channel.
+class MicrophonePermissions {
+  static const _iosChannel = MethodChannel('app.veya/permissions');
+
+  static bool get available =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  static Future<bool> isGranted() async {
+    if (!available) return false;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return await AndroidBridge.call<bool>('isMicrophoneGranted') ?? false;
+    }
+    return await _iosChannel.invokeMethod<bool>('isMicrophoneGranted') ?? false;
+  }
+
+  static Future<bool> request() async {
+    if (!available) return false;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return await AndroidBridge.call<bool>('requestMicrophone') ?? false;
+    }
+    return await _iosChannel.invokeMethod<bool>('requestMicrophone') ?? false;
+  }
 }
