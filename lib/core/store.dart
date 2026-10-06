@@ -204,6 +204,14 @@ class VeyaStore extends ChangeNotifier {
   }
 
   Future<void> savePhone(PhoneProfile profile, {bool verified = false}) async {
+    final trustedPhone = await secure.read(key: 'veya_trusted_device_phone');
+    // A new number must never inherit another account's trusted-device state.
+    if (trustedPhone != null && trustedPhone != profile.number) {
+      await Future.wait([
+        secure.delete(key: 'veya_trusted_device_phone'),
+        secure.delete(key: 'veya_trusted_device_uid'),
+      ]);
+    }
     await secure.write(
       key: 'veya_profile_phone',
       value: jsonEncode({
@@ -220,17 +228,43 @@ class VeyaStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Clears account-specific state while preserving device preferences such as
-  /// language and the selected translation service.
+  /// Returns true only when this exact number was verified on this device and
+  /// Firebase still has the corresponding encrypted local session. This avoids
+  /// another OTP after a local logout without allowing a different number to
+  /// reuse the session.
+  Future<bool> canResumeTrustedDevice(PhoneProfile profile) async {
+    final trustedPhone = await secure.read(key: 'veya_trusted_device_phone');
+    final trustedUid = await secure.read(key: 'veya_trusted_device_uid');
+    final user = FirebaseAuth.instance.currentUser;
+    if (trustedPhone != profile.number || trustedUid == null || user == null) {
+      return false;
+    }
+    if (trustedUid != user.uid) return false;
+    try {
+      await user.getIdToken();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> rememberTrustedDevice(PhoneProfile profile, User user) async {
+    await Future.wait([
+      secure.write(key: 'veya_trusted_device_phone', value: profile.number),
+      secure.write(key: 'veya_trusted_device_uid', value: user.uid),
+    ]);
+  }
+
+  /// Clears Veya's active account state while retaining a device-bound Firebase
+  /// session for the last verified number. Re-entering that exact number on the
+  /// same device resumes silently; any other number still uses OTP.
   Future<void> logout() async {
-    await FirebaseAuth.instance.signOut();
     await Future.wait([
       prefs.setBool('onboarded', false),
       prefs.remove('profile_setup_step'),
       prefs.remove('phoneOtpVerified'),
       prefs.remove('profileName'),
       secure.delete(key: 'veya_firebase_id_token'),
-      secure.delete(key: 'veya_firebase_uid'),
       secure.delete(key: 'veya_profile_phone'),
       secure.delete(key: 'veya_account_session'),
       secure.delete(key: 'veya_account_phone'),

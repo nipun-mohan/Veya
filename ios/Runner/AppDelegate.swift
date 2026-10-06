@@ -8,7 +8,17 @@ import AVFoundation
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleApplicationDidBecomeActive),
+      name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  @objc private func handleApplicationDidBecomeActive() {
+    VeyaKeyboardCoordinator.shared.startPendingIfNeeded(from: window?.rootViewController)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
@@ -42,5 +52,17 @@ import AVFoundation
         result(FlutterMethodNotImplemented)
       }
     }
+  }
+
+  override func application(
+    _ app: UIApplication,
+    open url: URL,
+    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+  ) -> Bool {
+    if url.scheme == "veya", url.host == "dictate" {
+      VeyaKeyboardCoordinator.shared.start(from: window?.rootViewController)
+      return true
+    }
+    return super.application(app, open: url, options: options)
   }
 }

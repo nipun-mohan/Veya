@@ -204,6 +204,13 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       );
       return;
     }
+    // A prior OTP verification on this device already established ownership of
+    // this exact number. The Firebase session is device-bound and kept only
+    // for this fast re-entry path after a local logout.
+    if (!isResend && await widget.store.canResumeTrustedDevice(profile)) {
+      await _resumeTrustedDevice(profile);
+      return;
+    }
     setState(() {
       busy = true;
       error = '';
@@ -248,6 +255,35 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     }
   }
 
+  Future<void> _resumeTrustedDevice(PhoneProfile profile) async {
+    if (mounted) {
+      setState(() {
+        busy = true;
+        error = '';
+        progress = 'Signing you in…';
+      });
+    }
+    try {
+      await widget.store.savePhone(profile, verified: true);
+      await widget.store.prefs.setBool('phoneOtpVerified', true);
+      await widget.store.syncNative();
+      otpVerified = true;
+      // Trusted-device re-entry is a login, not a repeat of onboarding.
+      // Completing here routes both login-only and cold-start flows to Home.
+      await complete();
+    } catch (_) {
+      if (mounted) {
+        setState(() => error = 'Could not restore this device session.');
+      }
+    } finally {
+      if (mounted)
+        setState(() {
+          busy = false;
+          progress = '';
+        });
+    }
+  }
+
   String _authError(FirebaseAuthException error) {
     switch (error.code) {
       case 'invalid-phone-number':
@@ -274,6 +310,23 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     return 'Could not send a verification code. Please try again.';
   }
 
+  String _otpVerificationError(int statusCode, Object? detail) {
+    final text = '${detail ?? ''}';
+    if (text.contains('VERIFY_RATE_LIMITED')) {
+      return 'Too many incorrect attempts. Request a new code.';
+    }
+    if (text.contains('OTP_EXPIRED')) {
+      return 'This code has expired. Request a new code.';
+    }
+    if (text.contains('OTP_NOT_FOUND')) {
+      return 'Request a new code and try again.';
+    }
+    if (statusCode >= 500 || statusCode == 503) {
+      return 'Verification is temporarily unavailable. Please try again.';
+    }
+    return 'That code is not correct. Please try again.';
+  }
+
   Future<void> _completePhoneVerification(
     UserCredential result,
     PhoneProfile profile,
@@ -287,6 +340,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     if (user == null) throw StateError('No signed-in user returned');
     final idToken = await user.getIdToken();
     await widget.store.savePhone(profile, verified: true);
+    await widget.store.rememberTrustedDevice(profile, user);
     if (idToken != null) {
       await widget.store.secure.write(
         key: 'veya_firebase_id_token',
@@ -337,7 +391,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final token = data['firebase_custom_token'] as String?;
       if (response.statusCode >= 400 || token == null) {
-        throw StateError(data['detail'] ?? 'That code is not correct.');
+        throw StateError(
+          _otpVerificationError(response.statusCode, data['detail']),
+        );
       }
       final result = await FirebaseAuth.instance.signInWithCustomToken(token);
       await _completePhoneVerification(result, profile);
@@ -351,9 +407,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       if (mounted) {
         setState(() {
           progress = '';
-          error = e.toString().contains('VERIFY_RATE_LIMITED')
-              ? 'Too many incorrect attempts. Request a new code.'
-              : 'That code is not correct. Please try again.';
+          error = e.toString().replaceFirst('Bad state: ', '');
         });
       }
     } finally {

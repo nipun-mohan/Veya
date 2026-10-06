@@ -27,7 +27,6 @@ android {
     // the same accessibility service and bridge as the assistant flavor.
     sourceSets {
         getByName("standard") {
-            java.setSrcDirs(listOf("src/assistant/kotlin"))
             res.setSrcDirs(listOf("src/assistant/res"))
             manifest.srcFile("src/assistant/AndroidManifest.xml")
         }

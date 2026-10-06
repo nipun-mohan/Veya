@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'dart:async';
+import 'package:video_player/video_player.dart';
 
 import '../core/localization.dart';
 import '../core/theme.dart';
@@ -71,28 +71,7 @@ class _AccessibilityConsentScreenState
             ),
           ),
           const SizedBox(height: 22),
-          const _WalkthroughPreview(),
-          const SizedBox(height: 22),
-          const Eyebrow('IN SETTINGS'),
-          const SizedBox(height: 10),
-          const _Step(
-            number: '1',
-            icon: Icons.apps_rounded,
-            title: 'Open Installed apps',
-            subtitle: 'Find it in Android Accessibility settings.',
-          ),
-          const _Step(
-            number: '2',
-            icon: Icons.record_voice_over_outlined,
-            title: 'Select Veya',
-            subtitle: 'Open Veya floating assistant.',
-          ),
-          const _Step(
-            number: '3',
-            icon: Icons.toggle_on_outlined,
-            title: 'Turn on access',
-            subtitle: 'Enable the main Veya toggle. Leave shortcuts off.',
-          ),
+          const _WalkthroughVideo(),
           const SizedBox(height: 18),
           SurfaceCard(
             padding: const EdgeInsets.all(18),
@@ -144,26 +123,33 @@ class _AccessibilityConsentScreenState
   );
 }
 
-class _WalkthroughPreview extends StatefulWidget {
-  const _WalkthroughPreview();
+class _WalkthroughVideo extends StatefulWidget {
+  const _WalkthroughVideo();
   @override
-  State<_WalkthroughPreview> createState() => _WalkthroughPreviewState();
+  State<_WalkthroughVideo> createState() => _WalkthroughVideoState();
 }
 
-class _WalkthroughPreviewState extends State<_WalkthroughPreview> {
-  int step = 0;
-  Timer? timer;
+class _WalkthroughVideoState extends State<_WalkthroughVideo> {
+  late final VideoPlayerController _controller;
+
   @override
   void initState() {
     super.initState();
-    timer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (mounted) setState(() => step = (step + 1) % 3);
-    });
+    _controller =
+        VideoPlayerController.asset('assets/video/floating_assistant_setup.mp4')
+          ..initialize().then((_) {
+            if (!mounted) return;
+            _controller
+              ..setLooping(true)
+              ..setVolume(0)
+              ..play();
+            setState(() {});
+          });
   }
 
   @override
   void dispose() {
-    timer?.cancel();
+    _controller.dispose();
     super.dispose();
   }
 
@@ -171,55 +157,32 @@ class _WalkthroughPreviewState extends State<_WalkthroughPreview> {
   Widget build(BuildContext context) => ClipRRect(
     borderRadius: BorderRadius.circular(20),
     child: Material(
-      color: VeyaColors.ink,
+      color: Colors.transparent,
       child: SizedBox(
-        child: AspectRatio(
-          aspectRatio: 16 / 10,
-          child: Stack(
-            children: [
-              Center(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 280),
-                  child: Column(
-                    key: ValueKey(step),
-                    mainAxisSize: MainAxisSize.min,
+        height: 520,
+        width: double.infinity,
+        child: Center(
+          child: AspectRatio(
+            aspectRatio: _controller.value.isInitialized
+                ? _controller.value.aspectRatio
+                : 9 / 16,
+            child: _controller.value.isInitialized
+                ? Stack(
+                    fit: StackFit.expand,
                     children: [
-                      Icon(
-                        [
-                          Icons.apps_rounded,
-                          Icons.accessibility_new_rounded,
-                          Icons.toggle_on_rounded,
-                        ][step],
-                        color: VeyaColors.mango,
-                        size: 48,
-                      ),
-                      const SizedBox(height: 14),
-                      LText(
-                        [
-                          '1  Open Installed apps',
-                          '2  Select Veya',
-                          '3  Turn on access',
-                        ][step],
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      const LText(
-                        'Veya floating assistant',
-                        style: TextStyle(
-                          color: Color(0xFFD9CFE8),
-                          fontSize: 12,
-                        ),
+                      VideoPlayer(_controller),
+                      const IgnorePointer(
+                        child: CustomPaint(painter: _VideoCornerMask()),
                       ),
                     ],
+                  )
+                : const Center(
+                    child: SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(color: VeyaColors.mango),
+                    ),
                   ),
-                ),
-              ),
-            ],
           ),
         ),
       ),
@@ -227,58 +190,24 @@ class _WalkthroughPreviewState extends State<_WalkthroughPreview> {
   );
 }
 
-class _Step extends StatelessWidget {
-  final String number;
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  const _Step({
-    required this.number,
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
+/// Android's video texture is rendered above Flutter's normal clip layer.
+/// This paints the page colour over its corners to create the intended shape.
+class _VideoCornerMask extends CustomPainter {
+  const _VideoCornerMask();
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: VeyaColors.mango,
-          child: LText(
-            number,
-            style: const TextStyle(fontWeight: FontWeight.w900),
-          ),
-        ),
-        const SizedBox(width: 13),
-        Icon(icon, color: VeyaColors.ink, size: 24),
-        const SizedBox(width: 13),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              LText(
-                title,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              LText(
-                subtitle,
-                style: const TextStyle(
-                  color: VeyaColors.muted,
-                  fontSize: 13,
-                  height: 1.35,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
+  void paint(Canvas canvas, Size size) {
+    final frame = Path()..addRect(Offset.zero & size);
+    final rounded = Path()
+      ..addRRect(
+        RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(18)),
+      );
+    canvas.drawPath(
+      Path.combine(PathOperation.difference, frame, rounded),
+      Paint()..color = VeyaColors.paper,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _VideoCornerMask oldDelegate) => false;
 }

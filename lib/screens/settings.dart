@@ -206,7 +206,7 @@ class _SettingsScreenState extends State<SettingsScreen>
       builder: (dialogContext) => AlertDialog(
         title: const LText('Log out?'),
         content: const LText(
-          'You’ll need to verify your phone number again to use Veya.',
+          'You can sign in again on this device with the same verified phone number without another code.',
         ),
         actions: [
           TextButton(
@@ -382,7 +382,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                 _PreferenceRow(
                   icon: Icons.logout_rounded,
                   title: 'Log out',
-                  subtitle: 'Sign out of this device',
+                  titleColor: const Color(0xFFB22222),
+                  iconColor: const Color(0xFFB22222),
+                  trailing: const SizedBox.shrink(),
                   onTap: _logout,
                 ),
               ],
@@ -488,21 +490,29 @@ class _PreferenceRow extends StatelessWidget {
   final String title;
   final String? subtitle;
   final Widget? trailing;
+  final Color titleColor;
+  final Color iconColor;
   final VoidCallback? onTap;
   const _PreferenceRow({
     required this.icon,
     required this.title,
     this.subtitle,
     this.trailing,
+    this.titleColor = VeyaColors.ink,
+    this.iconColor = VeyaColors.ink,
     this.onTap,
   });
   @override
   Widget build(BuildContext context) => ListTile(
     contentPadding: const EdgeInsets.symmetric(horizontal: 19, vertical: 2),
-    leading: Icon(icon, size: 28, color: VeyaColors.ink),
+    leading: Icon(icon, size: 28, color: iconColor),
     title: LText(
       title,
-      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+      style: TextStyle(
+        fontWeight: FontWeight.w800,
+        fontSize: 15,
+        color: titleColor,
+      ),
     ),
     subtitle: subtitle == null
         ? null
