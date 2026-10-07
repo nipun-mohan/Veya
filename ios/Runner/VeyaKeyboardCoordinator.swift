@@ -8,7 +8,7 @@ final class VeyaKeyboardCoordinator: NSObject {
   static let shared = VeyaKeyboardCoordinator()
 
   private let defaults = UserDefaults(suiteName: "group.app.veya.veya")!
-  private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+  private var recognizer: SFSpeechRecognizer?
   private let engine = AVAudioEngine()
   private var request: SFSpeechAudioBufferRecognitionRequest?
   private var task: SFSpeechRecognitionTask?
@@ -19,6 +19,8 @@ final class VeyaKeyboardCoordinator: NSObject {
 
   func start(from root: UIViewController?) {
     guard !engine.isRunning else { return }
+    defaults.removeObject(forKey: "veya_keyboard_text")
+    defaults.removeObject(forKey: "veya_keyboard_command")
     presentReturnHint(from: root)
     defaults.set("launching", forKey: "veya_keyboard_state")
     defaults.removeObject(forKey: "veya_keyboard_command")
@@ -53,6 +55,7 @@ final class VeyaKeyboardCoordinator: NSObject {
   }
 
   private func beginRecognition() {
+    recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier()))
     guard let recognizer, recognizer.isAvailable else {
       fail()
       return
@@ -62,7 +65,7 @@ final class VeyaKeyboardCoordinator: NSObject {
     request = audioRequest
     do {
       let session = AVAudioSession.sharedInstance()
-      try session.setCategory(.record, mode: .measurement, options: [.allowBluetooth])
+      try session.setCategory(.record, mode: .measurement, options: [.allowBluetoothHFP])
       try session.setActive(true, options: .notifyOthersOnDeactivation)
       let input = engine.inputNode
       let format = input.inputFormat(forBus: 0)
@@ -173,35 +176,58 @@ final class VeyaKeyboardCoordinator: NSObject {
       ? sentence : sentence + "."
   }
 
+  private func localeIdentifier() -> String {
+    switch defaults.string(forKey: "veya_keyboard_style") {
+    case "Hindi": return "hi-IN"
+    case "Malayalam": return "ml-IN"
+    default: return "en-IN"
+    }
+  }
+
   private func presentReturnHint(from root: UIViewController?) {
     guard let root, presentation == nil else { return }
     let controller = UIViewController()
-    controller.view.backgroundColor = UIColor(red: 0.11, green: 0.03, blue: 0.24, alpha: 1)
+    controller.modalPresentationStyle = .fullScreen
+    controller.view.backgroundColor = UIColor(red: 1, green: 0.980, blue: 0.953, alpha: 1)
+    let icon = UIImageView(image: UIImage(systemName: "waveform.circle.fill"))
+    icon.tintColor = UIColor(red: 1, green: 0.616, blue: 0.106, alpha: 1)
+    icon.contentMode = .scaleAspectFit
+    icon.translatesAutoresizingMaskIntoConstraints = false
     let badge = UILabel()
-    badge.text = "  veya  "
-    badge.textColor = .white
-    badge.backgroundColor = UIColor(red: 1, green: 0.58, blue: 0.04, alpha: 1)
-    badge.font = .systemFont(ofSize: 18, weight: .bold)
-    badge.layer.cornerRadius = 14
-    badge.clipsToBounds = true
+    badge.text = "● ACTIVE"
+    badge.textColor = UIColor(red: 0.12, green: 0.54, blue: 0.33, alpha: 1)
+    badge.font = .systemFont(ofSize: 13, weight: .bold)
+    badge.textAlignment = .center
     badge.translatesAutoresizingMaskIntoConstraints = false
     let title = UILabel()
     title.text = "Veya activated"
-    title.textColor = .white
-    title.font = .systemFont(ofSize: 28, weight: .bold)
+    title.textColor = UIColor(red: 0.106, green: 0.027, blue: 0.204, alpha: 1)
+    title.font = .systemFont(ofSize: 29, weight: .bold)
     title.textAlignment = .center
     title.translatesAutoresizingMaskIntoConstraints = false
     let body = UILabel()
-    body.text = "Recording starts now. Swipe back to return to the app where you were typing."
+    body.text = "Apple requires you to manually swipe back to start Veya."
     body.numberOfLines = 0
     body.textAlignment = .center
-    body.textColor = UIColor.white.withAlphaComponent(0.80)
+    body.textColor = UIColor(red: 0.40, green: 0.44, blue: 0.55, alpha: 1)
     body.font = .systemFont(ofSize: 17, weight: .regular)
     body.translatesAutoresizingMaskIntoConstraints = false
+    let hint = UILabel()
+    hint.text = "Swipe right to go back"
+    hint.textColor = UIColor(red: 0.106, green: 0.027, blue: 0.204, alpha: 1)
+    hint.font = .systemFont(ofSize: 17, weight: .semibold)
+    hint.textAlignment = .center
+    hint.translatesAutoresizingMaskIntoConstraints = false
+    controller.view.addSubview(icon)
     controller.view.addSubview(badge)
     controller.view.addSubview(title)
     controller.view.addSubview(body)
+    controller.view.addSubview(hint)
     NSLayoutConstraint.activate([
+      icon.centerXAnchor.constraint(equalTo: controller.view.centerXAnchor),
+      icon.bottomAnchor.constraint(equalTo: badge.topAnchor, constant: -20),
+      icon.widthAnchor.constraint(equalToConstant: 64),
+      icon.heightAnchor.constraint(equalToConstant: 64),
       badge.centerXAnchor.constraint(equalTo: controller.view.centerXAnchor),
       badge.bottomAnchor.constraint(equalTo: title.topAnchor, constant: -28),
       badge.heightAnchor.constraint(equalToConstant: 44),
@@ -210,6 +236,8 @@ final class VeyaKeyboardCoordinator: NSObject {
       body.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 16),
       body.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor, constant: 36),
       body.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor, constant: -36),
+      hint.centerXAnchor.constraint(equalTo: controller.view.centerXAnchor),
+      hint.bottomAnchor.constraint(equalTo: controller.view.safeAreaLayoutGuide.bottomAnchor, constant: -52),
     ])
     root.present(controller, animated: true)
     presentation = controller

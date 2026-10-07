@@ -155,7 +155,7 @@ final class KeyboardViewController: UIInputViewController {
 
   private func configureStyleMenu() {
     styleMenu.axis = .vertical; styleMenu.spacing = 0; styleMenu.backgroundColor = .white; styleMenu.layer.cornerRadius = 16; styleMenu.layer.shadowColor = UIColor.black.cgColor; styleMenu.layer.shadowOpacity = 0.16; styleMenu.layer.shadowRadius = 12; styleMenu.layer.shadowOffset = CGSize(width: 0, height: 5); styleMenu.translatesAutoresizingMaskIntoConstraints = false
-    ["Neutral", "Casual", "Formal", "Hindi"].forEach { title in
+    ["Neutral", "Casual", "Formal", "Hindi", "Malayalam"].forEach { title in
       let button = UIButton(type: .system); button.setTitle(title, for: .normal); button.setTitleColor(ink, for: .normal); button.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold); button.contentHorizontalAlignment = .left; button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 20, bottom: 0, right: 20); button.heightAnchor.constraint(equalToConstant: 44).isActive = true; button.addTarget(self, action: #selector(selectStyle(_:)), for: .touchUpInside); styleMenu.addArrangedSubview(button)
     }
   }
@@ -169,15 +169,16 @@ final class KeyboardViewController: UIInputViewController {
   }
 
   @objc private func startDictation() {
-    defaults.removeObject(forKey: "veya_keyboard_text"); defaults.set(selectedStyle, forKey: "veya_keyboard_style"); defaults.set("launching", forKey: "veya_keyboard_state")
+    defaults.removeObject(forKey: "veya_keyboard_text")
+    defaults.removeObject(forKey: "veya_keyboard_command")
+    defaults.set(selectedStyle, forKey: "veya_keyboard_style")
+    defaults.set("launching", forKey: "veya_keyboard_state")
     handoffNotice.text = "Opening Veya…"
     extensionContext?.open(URL(string: "veya://dictate")!) { [weak self] opened in
       DispatchQueue.main.async {
         guard let self else { return }
-        // iOS may refuse an app launch requested by a keyboard extension. Explain
-        // the safe fallback in the keyboard instead of leaving the mic unresponsive.
         self.handoffNotice.text = opened
-          ? "Veya is ready — swipe back when recording starts"
+          ? "Veya activated — swipe back when recording starts"
           : "Open Veya to record, then swipe back to insert"
       }
     }
