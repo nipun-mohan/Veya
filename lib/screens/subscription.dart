@@ -1,9 +1,7 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
 
 import '../core/localization.dart';
-import '../core/platform.dart';
 import '../core/store.dart';
 import '../core/subscription.dart';
 import '../core/theme.dart';
@@ -17,113 +15,97 @@ class SubscriptionScreen extends StatefulWidget {
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
 }
 
-class _SubscriptionScreenState extends State<SubscriptionScreen>
-    with WidgetsBindingObserver {
+class _SubscriptionScreenState extends State<SubscriptionScreen> {
+  late final Razorpay _razorpay;
   bool loading = false;
-  bool choosingPayment = false;
-  List<Map<String, String>> upiApps = const [];
-  Map<String, String>? selectedUpiApp;
   String? _pendingSubscriptionId;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _onPaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _onPaymentError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _onExternalWallet);
     _refresh();
-    _loadUpiApps();
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    _razorpay.clear();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        _pendingSubscriptionId != null &&
-        !loading) {
-      _verifyPayment(_pendingSubscriptionId!);
-    }
-  }
-
-  Future<void> _loadUpiApps() async {
-    final apps = await AndroidBridge.installedUpiApps();
-    if (!mounted) return;
-    setState(() {
-      upiApps = apps;
-      selectedUpiApp = apps.isEmpty ? null : apps.first;
-    });
-  }
-
-  static const _cashfreeAppKeys = {
-    'com.phonepe.app': 'PHONEPE',
-    'com.google.android.apps.nbu.paisa.user': 'GPAY',
-    'net.one97.paytm': 'PAYTM',
-    'in.amazon.mShop.android.shopping': 'AMAZONPAY',
-    'in.org.npci.upiapp': 'BHIM',
-  };
-
   Future<void> _startCheckout() async {
-    final selected = selectedUpiApp;
-    if (selected == null) return;
     setState(() => loading = true);
     try {
       final session = await SubscriptionApi(
         widget.store.endpoint,
       ).createCheckout();
       _pendingSubscriptionId = session.subscriptionId;
-      final providerKey = _cashfreeAppKeys[selected['package']];
-      final intentUrl = providerKey == null
-          ? null
-          : session.androidAuthAppLinks[providerKey];
-      if (intentUrl == null || intentUrl.isEmpty) {
-        throw StateError(
-          '${selected['name']} does not support Cashfree UPI AutoPay on this device. Choose another app.',
-        );
-      }
-      final opened = await AndroidBridge.launchUpiIntent(
-        intentUrl,
-        selected['package']!,
-      );
-      if (!opened) {
-        throw StateError(
-          'Could not open ${selected['name']}. Please choose another UPI app.',
-        );
-      }
-      if (mounted) {
-        _showMessage(
-          'Approve the AutoPay mandate in ${selected['name']}, then return to Veya.',
-        );
-      }
+      // Styling and eligible payment methods come from Razorpay Dashboard.
+      _razorpay.open({
+        'key': session.keyId,
+        'subscription_id': session.subscriptionId,
+        'name': session.name,
+        'description': session.description,
+        'prefill': {'contact': session.contact, 'email': session.email},
+      });
     } catch (error) {
-      _showError(error.toString());
+      _showMessage(error.toString(), error: true);
     } finally {
       if (mounted) setState(() => loading = false);
     }
   }
 
-  Future<void> _verifyPayment(String subscriptionId) async {
-    final id = subscriptionId.isNotEmpty
-        ? subscriptionId
-        : _pendingSubscriptionId;
-    if (id == null) return;
+  Future<void> _onPaymentSuccess(PaymentSuccessResponse response) async {
+    final subscriptionId = _pendingSubscriptionId;
+    final paymentId = response.paymentId;
+    final signature = response.signature;
+    if (subscriptionId == null || paymentId == null || signature == null) {
+      _showMessage(
+        'Razorpay returned an incomplete payment result.',
+        error: true,
+      );
+      return;
+    }
+    setState(() => loading = true);
     try {
-      final verified = await SubscriptionApi(
-        widget.store.endpoint,
-      ).verifyCheckout(id);
+      final verified = await SubscriptionApi(widget.store.endpoint)
+          .verifyCheckout(
+            subscriptionId: subscriptionId,
+            paymentId: paymentId,
+            signature: signature,
+          );
       if (!mounted) return;
       widget.store.applySubscription(verified);
-      setState(() => choosingPayment = false);
-      _showMessage('Your subscription is active.');
+      _showMessage('Your AutoPay subscription is active.');
     } catch (_) {
       await _refresh();
       _showMessage('We are confirming your AutoPay mandate.');
+    } finally {
+      if (mounted) setState(() => loading = false);
     }
   }
 
-  void _showError(String message) => _showMessage(message, error: true);
+  void _onPaymentError(PaymentFailureResponse response) => _showMessage(
+    response.message ?? 'Payment could not be completed. Please try again.',
+    error: true,
+  );
+
+  void _onExternalWallet(ExternalWalletResponse response) => _showMessage(
+    '${response.walletName ?? 'This wallet'} is not available for this AutoPay subscription.',
+    error: true,
+  );
+
+  Future<void> _refresh() async {
+    setState(() => loading = true);
+    try {
+      await widget.store.refreshSubscription();
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
 
   void _showMessage(String message, {bool error = false}) {
     if (!mounted) return;
@@ -135,17 +117,11 @@ class _SubscriptionScreenState extends State<SubscriptionScreen>
     );
   }
 
-  Future<void> _refresh() async {
-    setState(() => loading = true);
-    await widget.store.refreshSubscription();
-    if (mounted) setState(() => loading = false);
-  }
-
   @override
   Widget build(BuildContext context) {
     final subscription = widget.store.subscription;
     if (subscription?.isTrialing == true) return _activePlan(subscription!);
-    return choosingPayment ? _paymentPicker() : _planOverview();
+    return _planOverview();
   }
 
   Widget _planOverview() => Scaffold(
@@ -183,20 +159,15 @@ class _SubscriptionScreenState extends State<SubscriptionScreen>
           ),
           const SizedBox(height: 34),
           const LText(
-            'Pay today',
+            'Start today',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 8),
           const Row(
             children: [
               Text(
-                '₹9',
-                style: TextStyle(fontSize: 42, fontWeight: FontWeight.w900),
-              ),
-              SizedBox(width: 12),
-              Text(
-                'for 5 days',
-                style: TextStyle(fontSize: 17, color: VeyaColors.muted),
+                '5 days free',
+                style: TextStyle(fontSize: 38, fontWeight: FontWeight.w900),
               ),
             ],
           ),
@@ -213,7 +184,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen>
                 SizedBox(width: 12),
                 Expanded(
                   child: LText(
-                    'AutoPay keeps your Premium plan active each month.',
+                    'Approve a Razorpay AutoPay mandate to keep Premium active each month.',
                     style: TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
@@ -222,170 +193,19 @@ class _SubscriptionScreenState extends State<SubscriptionScreen>
           ),
           const SizedBox(height: 26),
           FilledButton(
-            onPressed: loading
-                ? null
-                : () => setState(() => choosingPayment = true),
-            child: const LText('Choose payment app'),
+            onPressed: loading ? null : _startCheckout,
+            child: loading
+                ? const SizedBox(width: 20, height: 20, child: VeyaLoader())
+                : const LText('Set up AutoPay'),
           ),
           const SizedBox(height: 14),
           const LText(
-            'No Veya feature is restricted during this rollout.',
+            'Payment methods and checkout appearance are managed securely in Razorpay.',
             textAlign: TextAlign.center,
             style: TextStyle(color: VeyaColors.muted, fontSize: 12),
           ),
         ],
       ),
-    ),
-  );
-
-  Widget _paymentPicker() => Scaffold(
-    appBar: AppBar(
-      title: const LText('Choose payment app'),
-      leading: IconButton(
-        onPressed: loading
-            ? null
-            : () => setState(() => choosingPayment = false),
-        icon: const Icon(Icons.arrow_back),
-      ),
-    ),
-    body: SafeArea(
-      child: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(24, 18, 24, 16),
-              children: [
-                const LText(
-                  'Set up AutoPay',
-                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 8),
-                const LText(
-                  'Choose a UPI app installed on this phone. You will securely confirm the mandate in that app.',
-                  style: TextStyle(color: VeyaColors.muted),
-                ),
-                const SizedBox(height: 22),
-                if (upiApps.isEmpty)
-                  const SurfaceCard(
-                    child: LText(
-                      'No supported UPI app was found. Install PhonePe, Google Pay, Paytm, CRED, Amazon Pay, BHIM, or SuperMoney, then reopen this screen.',
-                    ),
-                  ),
-                ...upiApps.map(_upiAppTile),
-                if (upiApps.isNotEmpty) const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: loading ? null : _loadUpiApps,
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: const LText('Refresh installed apps'),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 8, 24, 22),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: loading ? null : _startCheckout,
-                child: loading
-                    ? const SizedBox(width: 20, height: 20, child: VeyaLoader())
-                    : LText(
-                        selectedUpiApp == null
-                            ? 'Continue securely'
-                            : 'Continue with ${selectedUpiApp!['name']}',
-                      ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _upiAppTile(Map<String, String> app) {
-    final isSelected = selectedUpiApp?['package'] == app['package'];
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Material(
-        color: isSelected
-            ? VeyaColors.teal.withValues(alpha: .10)
-            : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: loading ? null : () => setState(() => selectedUpiApp = app),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: isSelected ? VeyaColors.teal : VeyaColors.line,
-              ),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                _upiAppIcon(app),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: LText(
-                    app['name']!,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 17,
-                    ),
-                  ),
-                ),
-                Icon(
-                  isSelected
-                      ? Icons.radio_button_checked_rounded
-                      : Icons.radio_button_off_rounded,
-                  color: isSelected ? VeyaColors.teal : VeyaColors.muted,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Color _appColor(String packageName) {
-    if (packageName.contains('phonepe')) return const Color(0xFF5F259F);
-    if (packageName.contains('google')) return const Color(0xFF4285F4);
-    if (packageName.contains('paytm')) return const Color(0xFF00B9F5);
-    if (packageName.contains('dreamplug')) return const Color(0xFF111111);
-    if (packageName.contains('amazon')) return const Color(0xFFFF9900);
-    return VeyaColors.teal;
-  }
-
-  Widget _upiAppIcon(Map<String, String> app) {
-    final encodedIcon = app['icon'];
-    if (encodedIcon != null && encodedIcon.isNotEmpty) {
-      try {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.memory(
-            base64Decode(encodedIcon),
-            width: 48,
-            height: 48,
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => _upiAppInitial(app),
-          ),
-        );
-      } on FormatException {
-        // A launcher icon is cosmetic. Preserve a usable fallback if Android
-        // returns an icon in an unexpected format.
-      }
-    }
-    return _upiAppInitial(app);
-  }
-
-  Widget _upiAppInitial(Map<String, String> app) => CircleAvatar(
-    radius: 24,
-    backgroundColor: _appColor(app['package']!),
-    child: Text(
-      app['name']!.substring(0, 1),
-      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
     ),
   );
 
@@ -411,7 +231,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen>
                 LText(
                   days == null
                       ? 'Your plan is active.'
-                      : '$days day${days == 1 ? '' : 's'} remaining in your trial.',
+                      : '$days day${days == 1 ? '' : 's'} remaining in your free trial.',
                   style: const TextStyle(color: VeyaColors.muted),
                 ),
               ],

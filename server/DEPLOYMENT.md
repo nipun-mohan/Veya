@@ -65,30 +65,36 @@ name. The export is daily, so the first table can take around 24 hours to
 appear. The Cloud Run runtime needs BigQuery Data Viewer on that dataset and
 BigQuery Job User on the project.
 
-## Subscription foundation
+## Razorpay subscriptions
 
-Veya stores one subscription entitlement document per Firebase user in Cloud
-Firestore. Enable **Cloud Firestore (Native mode)** in the same Google Cloud
-project before deploying the subscription endpoints. Give the Cloud Run runtime
-service account **Cloud Datastore User** so it can read and write the
-`veya_subscriptions` collection.
+Veya stores one entitlement document per Firebase user in Cloud Firestore. Enable
+**Cloud Firestore (Native mode)** and grant the Cloud Run service account **Cloud
+Datastore User** for the `veya_subscriptions` collection.
 
-The ₹9 five-day trial begins only after Cashfree confirms its payment. The
-monthly renewal price is ₹129. Subscription state is informational during this
-rollout: no voice, translation, assistant, or insertion feature is restricted.
-
-Cashfree keys belong only in Secret Manager:
+The Razorpay plan is ₹129/month with a five-day free trial. Create one monthly
+plan in Razorpay Dashboard or API, then store its `plan_…` ID with the gateway
+credentials in Secret Manager:
 
 ```text
-CASHFREE_ENVIRONMENT=sandbox
-CASHFREE_CLIENT_ID=<Cashfree app id>
-CASHFREE_CLIENT_SECRET=<Cashfree secret>
-CASHFREE_TRIAL_PRICE_INR=9
-CASHFREE_MONTHLY_PRICE_INR=129
+RAZORPAY_KEY_ID=<test or live key id>
+RAZORPAY_KEY_SECRET=<matching key secret>
+RAZORPAY_PLAN_ID=<monthly ₹129 plan id>
+RAZORPAY_WEBHOOK_SECRET=<new webhook secret>
+RAZORPAY_MONTHLY_PRICE_INR=129
 ```
 
-Do not deploy the Cashfree checkout until the Cashfree merchant account has
-Subscriptions/UPI AutoPay activated and a monthly price has been approved. For
-the Google Play-distributed app, enroll in Google Play's India alternative
-billing program and present the required billing choice before offering a
-Cashfree subscription in-app.
+Set a Razorpay webhook URL to:
+
+```text
+https://<your-gateway-host>/v1/subscription/razorpay/webhook
+```
+
+Subscribe to `subscription.activated`, `subscription.pending`,
+`subscription.halted`, `subscription.cancelled`, and `payment.authorized`.
+The endpoint validates Razorpay's raw-body HMAC before recording any state.
+Use matching Test or Live keys and configure the webhook separately in that
+Razorpay mode. Checkout styling and eligible payment methods are controlled in
+Razorpay Dashboard, so they are not overridden by the mobile app.
+
+Subscription state is informational during this rollout: no voice, translation,
+assistant, or insertion feature is restricted.

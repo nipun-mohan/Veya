@@ -16,31 +16,6 @@ class AndroidBridge {
     if (!assistantAvailable) return null;
     return channel.invokeMethod<T>(method, arguments);
   }
-
-  static Future<bool> launchUpiIntent(
-    String intentUrl,
-    String packageName,
-  ) async {
-    if (!assistantAvailable) return false;
-    return await call<bool>('launchUpiIntent', {
-          'intentUrl': intentUrl,
-          'packageName': packageName,
-        }) ??
-        false;
-  }
-
-  static Future<List<Map<String, String>>> installedUpiApps() async {
-    if (!assistantAvailable) return const [];
-    final raw = await call<List<dynamic>>('installedUpiApps');
-    return (raw ?? const [])
-        .whereType<Map>()
-        .map(
-          (app) => app.map(
-            (key, value) => MapEntry(key.toString(), value.toString()),
-          ),
-        )
-        .toList();
-  }
 }
 
 /// Requests microphone access on platforms that can record inside Veya.

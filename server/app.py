@@ -23,8 +23,8 @@ from server.costs import CloudBillingCosts
 from server.dashboard import DASHBOARD_HTML, GatewayMetrics, SUBSCRIPTIONS
 from server.privacy import PRIVACY_POLICY_HTML
 from server.subscriptions import (
-    SubscriptionStore, cashfree_configuration, create_cashfree_subscription,
-    create_cashfree_upi_authorization, fetch_cashfree_subscription,
+    SubscriptionStore, create_razorpay_subscription, fetch_razorpay_subscription,
+    razorpay_configuration, verify_razorpay_checkout, verify_razorpay_webhook,
 )
 from server.minimoth import send_otp as minimoth_send_otp, verify_otp as minimoth_verify_otp
 
@@ -196,19 +196,12 @@ async def verify_phone_otp(body: OtpVerifyRequest, request: Request):
 
 @app.get('/v1/subscription')
 async def subscription_status(request: Request):
-    """Return the authenticated user's server-side trial/entitlement state.
-
-    A new user is marked ready to start a paid trial. The five-day trial starts
-    only after Cashfree confirms the ₹9 introductory payment. The result is
-    informational during rollout; no Veya feature uses it for access control.
-    """
+    """Return the authenticated user's server-side Razorpay entitlement state."""
     identity = verified_firebase_user(request)
     uid = str(identity['uid'])
     phone = identity.get('phone_number')
     try:
-        return request.app.state.subscriptions.entitlement_for(
-            uid, str(phone) if phone else None,
-        )
+        return request.app.state.subscriptions.entitlement_for(uid, str(phone) if phone else None)
     except Exception as error:
         print(f'Subscription store unavailable: {error!r}', flush=True)
         raise HTTPException(503, 'Subscription service is temporarily unavailable.')
@@ -216,56 +209,75 @@ async def subscription_status(request: Request):
 
 @app.get('/v1/subscription/payment-configuration')
 async def subscription_payment_configuration(request: Request):
-    """Return safe Cashfree readiness metadata; keys remain server-only."""
+    """Return safe Razorpay readiness metadata; the API secret stays server-only."""
     verified_firebase_user(request)
-    return cashfree_configuration()
+    return razorpay_configuration()
 
 
 @app.post('/v1/subscription/checkout')
 async def subscription_checkout(request: Request):
-    """Create a Cashfree subscription checkout session for the signed-in user."""
+    """Create a Razorpay subscription for the signed-in user."""
     identity = verified_firebase_user(request)
     uid = str(identity['uid'])
-    phone = identity.get('phone_number')
-    email = identity.get('email')
     try:
-        checkout = await create_cashfree_subscription(
-            uid, str(phone) if phone else None, str(email) if email else None,
-        )
-        authorization = await create_cashfree_upi_authorization(
-            checkout['subscription_id'], checkout['subscription_session_id'],
+        checkout = await create_razorpay_subscription(
+            uid, str(identity.get('phone_number') or '') or None,
+            str(identity.get('email') or '') or None,
         )
         request.app.state.subscriptions.record_checkout(uid, checkout['subscription_id'])
-        return authorization
-    except ValueError as error:
-        raise HTTPException(400, str(error))
+        return checkout
     except RuntimeError as error:
-        print(f'Cashfree checkout unavailable: {error!r}', flush=True)
+        print(f'Razorpay checkout unavailable: {error!r}', flush=True)
         raise HTTPException(503, 'Payment service is temporarily unavailable.')
 
 
 @app.post('/v1/subscription/verify')
 async def subscription_verify(request: Request):
-    """Verify a Cashfree callback with the provider before updating Firestore."""
+    """Verify Razorpay Checkout's signed subscription result before recording it."""
     identity = verified_firebase_user(request)
     uid = str(identity['uid'])
     try:
         body = await request.json()
         subscription_id = str(body.get('subscription_id') or '')
-        if not subscription_id:
-            raise HTTPException(400, 'A subscription ID is required.')
+        payment_id = str(body.get('payment_id') or '')
+        signature = str(body.get('signature') or '')
+        if not subscription_id or not payment_id or not signature:
+            raise HTTPException(400, 'The Razorpay payment response is incomplete.')
         if not request.app.state.subscriptions.owns_subscription(uid, subscription_id):
             raise HTTPException(403, 'This subscription does not belong to the current user.')
-        payload = await fetch_cashfree_subscription(subscription_id)
-        request.app.state.subscriptions.record_cashfree_status(uid, payload)
-        return request.app.state.subscriptions.entitlement_for(
-            uid, str(identity.get('phone_number') or '') or None,
-        )
+        if not verify_razorpay_checkout(subscription_id, payment_id, signature):
+            raise HTTPException(400, 'The payment signature is invalid.')
+        payload = await fetch_razorpay_subscription(subscription_id)
+        request.app.state.subscriptions.record_razorpay_status(uid, payload)
+        return request.app.state.subscriptions.entitlement_for(uid, str(identity.get('phone_number') or '') or None)
     except HTTPException:
         raise
     except RuntimeError as error:
-        print(f'Cashfree subscription verification unavailable: {error!r}', flush=True)
+        print(f'Razorpay subscription verification unavailable: {error!r}', flush=True)
         raise HTTPException(503, 'Payment verification is temporarily unavailable.')
+
+
+@app.post('/v1/subscription/razorpay/webhook', include_in_schema=False)
+async def razorpay_subscription_webhook(request: Request):
+    """Accept only signed Razorpay subscription webhooks using the raw body."""
+    raw_body = await request.body()
+    if not verify_razorpay_webhook(raw_body, request.headers.get('x-razorpay-signature', '')):
+        raise HTTPException(401, 'Invalid Razorpay webhook signature.')
+    try:
+        event = json.loads(raw_body)
+        subscription = ((event.get('payload') or {}).get('subscription') or {}).get('entity') or {}
+        subscription_id = str(subscription.get('id') or '')
+        uid = str((subscription.get('notes') or {}).get('uid') or '')
+        if not uid and subscription_id:
+            uid = request.app.state.subscriptions.uid_for_subscription(subscription_id) or ''
+        if subscription_id and uid:
+            request.app.state.subscriptions.record_razorpay_status(
+                uid, subscription, request.headers.get('x-razorpay-event-id'),
+            )
+    except (TypeError, ValueError) as error:
+        print(f'Invalid Razorpay webhook payload: {error!r}', flush=True)
+        raise HTTPException(400, 'Invalid webhook payload.')
+    return {'ok': True}
 
 
 class TranslateRequest(BaseModel):
@@ -648,7 +660,7 @@ def privacy_policy():
 
 @app.get('/.well-known/assetlinks.json', include_in_schema=False)
 def android_asset_links():
-    """Authorize Veya to receive Cashfree's HTTPS subscription return link."""
+    """Authorize Veya to receive the optional subscription return link."""
     return JSONResponse([{
         'relation': ['delegate_permission/common.handle_all_urls'],
         'target': {
