@@ -54,9 +54,19 @@ class RazorpaySubscriptionSession {
 
   factory RazorpaySubscriptionSession.fromJson(Map<String, dynamic> data) {
     final prefill = data['prefill'] as Map? ?? const {};
+    final subscriptionId = data['subscription_id'];
+    final keyId = data['key_id'];
+    if (subscriptionId is! String ||
+        subscriptionId.isEmpty ||
+        keyId is! String ||
+        keyId.isEmpty) {
+      throw StateError(
+        'Payment setup is temporarily unavailable. Please try again shortly.',
+      );
+    }
     return RazorpaySubscriptionSession(
-      subscriptionId: data['subscription_id'] as String,
-      keyId: data['key_id'] as String,
+      subscriptionId: subscriptionId,
+      keyId: keyId,
       name: data['name'] as String? ?? 'Veya',
       description:
           data['description'] as String? ?? 'Veya Premium subscription',

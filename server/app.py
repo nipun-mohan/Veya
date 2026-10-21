@@ -43,6 +43,14 @@ SARVAM_BASE_URL = 'https://api.sarvam.ai'
 # completely unavailable until its value is supplied through Secret Manager.
 VEYA_ADMIN_TOKEN = os.environ.get('VEYA_ADMIN_TOKEN', '').strip()
 
+# A single fixed test identity can exercise the complete custom-token login
+# flow without sending a real WhatsApp or SMS message.  Both values must be
+# configured explicitly in the deployment environment; leaving either blank
+# disables this path entirely.  Do not use a customer phone number here.
+TEST_OTP_PHONE = os.environ.get('VEYA_TEST_OTP_PHONE', '').strip()
+TEST_OTP_CODE = os.environ.get('VEYA_TEST_OTP_CODE', '').strip()
+TEST_OTP_REQUEST_ID = 'veya-local-test-otp'
+
 # Languages available in Veya's current selector.
 LANGUAGE_NAMES = {
     'as-IN': 'Assamese', 'bn-IN': 'Bengali', 'en-IN': 'English',
@@ -144,6 +152,11 @@ class OtpVerifyRequest(OtpSendRequest):
     code: str = Field(pattern=r'^\d{6}$')
 
 
+def is_test_otp_phone(phone: str) -> bool:
+    """Return true only when the explicitly configured test identity matches."""
+    return bool(TEST_OTP_PHONE and TEST_OTP_CODE and hmac.compare_digest(phone, TEST_OTP_PHONE))
+
+
 def firebase_user_for_verified_phone(phone: str) -> str:
     """Use the old Firebase phone user when it exists, preserving app data."""
     if not firebase_admin._apps:
@@ -159,6 +172,10 @@ def firebase_user_for_verified_phone(phone: str) -> str:
 @app.post('/v1/auth/otp/send')
 async def send_phone_otp(body: OtpSendRequest, request: Request):
     """Start MiniMoth WhatsApp-first OTP delivery without exposing its key."""
+    if is_test_otp_phone(body.phone):
+        # Keep the client flow identical to a real delivery, while never
+        # contacting MiniMoth for this non-customer test identity.
+        return {'otp_id': TEST_OTP_REQUEST_ID, 'expires_at': None}
     try:
         result = await minimoth_send_otp(request.app.state.sarvam_client, body.phone)
         return {
@@ -179,9 +196,14 @@ async def send_phone_otp(body: OtpSendRequest, request: Request):
 async def verify_phone_otp(body: OtpVerifyRequest, request: Request):
     """Verify with MiniMoth then issue Firebase custom auth for Veya services."""
     try:
-        result = await minimoth_verify_otp(
-            request.app.state.sarvam_client, body.phone, body.code,
-        )
+        if is_test_otp_phone(body.phone):
+            if not hmac.compare_digest(body.code, TEST_OTP_CODE):
+                raise ValueError('OTP_INVALID')
+            result = {'identity_id': 'veya-test-identity'}
+        else:
+            result = await minimoth_verify_otp(
+                request.app.state.sarvam_client, body.phone, body.code,
+            )
         uid = firebase_user_for_verified_phone(body.phone)
         custom_token = firebase_auth.create_custom_token(uid).decode('utf-8')
         return {'firebase_custom_token': custom_token, 'identity_id': result.get('identity_id')}

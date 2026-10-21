@@ -50,6 +50,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         'name': session.name,
         'description': session.description,
         'prefill': {'contact': session.contact, 'email': session.email},
+        // Veya already verifies the phone number during sign-in. Do not ask
+        // the customer to enter contact details again in Checkout.
+        'hidden': {'contact': true, 'email': true},
+        'readonly': {'contact': true, 'email': true},
       });
     } catch (error) {
       _showMessage(error.toString(), error: true);

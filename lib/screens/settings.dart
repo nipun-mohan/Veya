@@ -7,7 +7,6 @@ import '../widgets/shared.dart';
 import 'accessibility_consent.dart';
 import 'onboarding.dart';
 import 'privacy_policy.dart';
-import 'subscription.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VeyaStore store;
@@ -19,8 +18,6 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen>
     with WidgetsBindingObserver {
   bool enabled = false;
-  bool _editingTranslation = false;
-  TextEditingController? _translationController;
   @override
   void initState() {
     super.initState();
@@ -77,28 +74,6 @@ class _SettingsScreenState extends State<SettingsScreen>
   Future<void> _openAccessibilitySettings() async {
     await widget.store.syncNative();
     await AndroidBridge.call('openAccessibility');
-  }
-
-  void _editTranslationEndpoint() {
-    _translationController = TextEditingController(text: widget.store.endpoint);
-    setState(() => _editingTranslation = true);
-  }
-
-  void _closeTranslationEditor() {
-    _translationController?.dispose();
-    _translationController = null;
-    setState(() => _editingTranslation = false);
-  }
-
-  Future<void> _saveTranslationEndpoint() async {
-    final value = _translationController?.text.trim() ?? '';
-    if (value.isNotEmpty) {
-      widget.store.endpoint = value.replaceAll(RegExp(r'/+$'), '');
-      await widget.store.persist();
-    }
-    if (!mounted) return;
-    _closeTranslationEditor();
-    if (value.isNotEmpty) toast(context, 'Translation service saved.');
   }
 
   Future<void> _editProfile(BuildContext context) async {
@@ -348,26 +323,6 @@ class _SettingsScreenState extends State<SettingsScreen>
                 ),
                 const Divider(),
                 _PreferenceRow(
-                  icon: Icons.tune_rounded,
-                  title: 'Translation settings',
-                  onTap: _editTranslationEndpoint,
-                ),
-                const Divider(),
-                _PreferenceRow(
-                  icon: Icons.workspace_premium_outlined,
-                  title: 'Plan & billing',
-                  subtitle: widget.store.subscription?.isTrialing == true
-                      ? '5-day trial active'
-                      : 'Monthly subscription',
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => SubscriptionScreen(store: widget.store),
-                    ),
-                  ),
-                ),
-                const Divider(),
-                _PreferenceRow(
                   icon: Icons.privacy_tip_outlined,
                   title: 'Privacy policy',
                   subtitle: 'View the latest policy',
@@ -391,95 +346,6 @@ class _SettingsScreenState extends State<SettingsScreen>
             ),
           ),
         ],
-      ),
-      if (_editingTranslation && _translationController != null)
-        _TranslationEditor(
-          controller: _translationController!,
-          onClose: _closeTranslationEditor,
-          onSave: _saveTranslationEndpoint,
-        ),
-    ],
-  );
-}
-
-class _TranslationEditor extends StatelessWidget {
-  const _TranslationEditor({
-    required this.controller,
-    required this.onClose,
-    required this.onSave,
-  });
-
-  final TextEditingController controller;
-  final VoidCallback onClose;
-  final Future<void> Function() onSave;
-
-  @override
-  Widget build(BuildContext context) => Stack(
-    children: [
-      Positioned.fill(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onClose,
-          child: const ColoredBox(color: Color(0x88000000)),
-        ),
-      ),
-      Align(
-        alignment: Alignment.bottomCenter,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-            child: Material(
-              color: VeyaColors.paper,
-              borderRadius: BorderRadius.circular(28),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _SheetDismissHandle(onDismiss: onClose),
-                    const SizedBox(height: 8),
-                    const LText(
-                      'Translation service',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: controller,
-                      keyboardType: TextInputType.url,
-                      decoration: const InputDecoration(
-                        hintText: 'https://api.heyveya.app',
-                        labelText: 'Gateway URL',
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: onClose,
-                            child: const LText('Cancel'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: FilledButton(
-                            onPressed: onSave,
-                            child: const LText('Save'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
       ),
     ],
   );
