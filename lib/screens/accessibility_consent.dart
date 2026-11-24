@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/localization.dart';
@@ -131,24 +134,48 @@ class _WalkthroughVideo extends StatefulWidget {
 
 class _WalkthroughVideoState extends State<_WalkthroughVideo> {
   late final VideoPlayerController _controller;
+  bool _videoUnavailable = false;
 
   @override
   void initState() {
     super.initState();
-    _controller =
-        VideoPlayerController.asset('assets/video/floating_assistant_setup.mp4')
-          ..initialize().then((_) {
-            if (!mounted) return;
-            _controller
-              ..setLooping(true)
-              ..setVolume(0)
-              ..play();
-            setState(() {});
-          });
+    _controller = VideoPlayerController.asset(
+      'assets/video/floating_assistant_setup.mp4',
+    );
+    _controller.addListener(_handleControllerUpdate);
+    unawaited(_initializeVideo());
+  }
+
+  Future<void> _initializeVideo() async {
+    try {
+      await _controller.initialize();
+      if (!mounted || _controller.value.hasError) {
+        if (mounted) setState(() => _videoUnavailable = true);
+        return;
+      }
+      await _controller.setLooping(true);
+      await _controller.setVolume(0);
+      await _controller.play();
+      if (mounted) setState(() {});
+    } on PlatformException {
+      // Some older devices cannot decode the walkthrough's H.264 stream.
+      // The video is illustrative only, so retain the setup path and avoid an
+      // uncaught framework error being reported as a fatal app crash.
+      if (mounted) setState(() => _videoUnavailable = true);
+    } catch (_) {
+      if (mounted) setState(() => _videoUnavailable = true);
+    }
+  }
+
+  void _handleControllerUpdate() {
+    if (mounted && _controller.value.hasError && !_videoUnavailable) {
+      setState(() => _videoUnavailable = true);
+    }
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_handleControllerUpdate);
     _controller.dispose();
     super.dispose();
   }
@@ -166,7 +193,9 @@ class _WalkthroughVideoState extends State<_WalkthroughVideo> {
             aspectRatio: _controller.value.isInitialized
                 ? _controller.value.aspectRatio
                 : 9 / 16,
-            child: _controller.value.isInitialized
+            child: _videoUnavailable
+                ? const _VideoUnavailablePreview()
+                : _controller.value.isInitialized
                 ? Stack(
                     fit: StackFit.expand,
                     children: [
@@ -184,6 +213,36 @@ class _WalkthroughVideoState extends State<_WalkthroughVideo> {
                     ),
                   ),
           ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _VideoUnavailablePreview extends StatelessWidget {
+  const _VideoUnavailablePreview();
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    color: VeyaColors.ink,
+    child: Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.play_circle_outline_rounded,
+              color: VeyaColors.mango,
+              size: 44,
+            ),
+            const SizedBox(height: 10),
+            LText(
+              'Setup preview is unavailable on this device.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+          ],
         ),
       ),
     ),

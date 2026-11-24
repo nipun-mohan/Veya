@@ -5,6 +5,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -37,9 +38,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    buildFeatures {
+        // MainActivity uses BuildConfig.DEBUG to keep development endpoints
+        // out of signed release builds.
+        buildConfig = true
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "app.veya.veya"
+        applicationId = "app.veya.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 26
@@ -65,11 +72,12 @@ android {
 
     buildTypes {
         release {
-            // Keep the install build quick and predictable; publishing can enable
-            // shrinking once the release pipeline is finalized.
-            isMinifyEnabled = false
-            isShrinkResources = false
-            proguardFiles("proguard-rules.pro")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // Development fallback; provide key.properties for publishing.
             signingConfig = signingConfigs.getByName(if (releaseKeysFile.exists()) "upload" else "debug")
         }
@@ -93,4 +101,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.android.gms:play-services-auth-api-phone:18.1.0")
     implementation("com.google.firebase:firebase-auth:23.2.1")
+    implementation(platform("com.google.firebase:firebase-bom:33.10.0"))
+    implementation("com.google.firebase:firebase-analytics")
 }

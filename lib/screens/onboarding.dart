@@ -34,10 +34,11 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen>
     with WidgetsBindingObserver {
   static const _flow = [1, 2, 0, 3, 4];
+  static const _indiaDialCode = '+91';
   int step = 1, demo = 0;
   bool busy = false, microphone = false, assistant = false;
   bool otpVerified = false;
-  String dial = '+91', error = '';
+  String dial = _indiaDialCode, error = '';
   String? otpRequestId;
   String progress = '';
   int resendSeconds = 0;
@@ -62,7 +63,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       widget.store.prefs.remove('profile_setup_step');
     }
     if (step > 2 && widget.store.phoneNumber.isEmpty) step = 1;
-    dial = widget.store.phoneCountryCode;
+    // Phone sign-in is currently available for Indian mobile numbers only.
+    // Keep the country code fixed so a previously stored foreign number cannot
+    // make the login form look selectable or fail validation unexpectedly.
+    dial = _indiaDialCode;
     phone.text = otpVerified ? widget.store.phoneNationalNumber : '';
     animation = Timer.periodic(const Duration(seconds: 2), (_) {
       if (mounted && step == 3) setState(() => demo = (demo + 1) % 4);
@@ -200,7 +204,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     final profile = PhoneProfile.parse(dial, phone.text);
     if (profile == null) {
       setState(
-        () => error = 'Enter a valid phone number, including its country code.',
+        () => error = 'Enter a valid 10-digit Indian mobile number.',
       );
       return;
     }
@@ -338,15 +342,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       });
     final user = result.user;
     if (user == null) throw StateError('No signed-in user returned');
-    final idToken = await user.getIdToken();
     await widget.store.savePhone(profile, verified: true);
     await widget.store.rememberTrustedDevice(profile, user);
-    if (idToken != null) {
-      await widget.store.secure.write(
-        key: 'veya_firebase_id_token',
-        value: idToken,
-      );
-    }
     await widget.store.secure.write(key: 'veya_firebase_uid', value: user.uid);
     await widget.store.prefs.setBool('phoneOtpVerified', true);
     otpVerified = true;
@@ -817,53 +814,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       ],
     ),
   );
-  Future<void> countries() async {
-    final selection = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      // Flutter's route-level drag dismissal can leave inherited widgets
-      // attached on iOS. Keep the familiar handle, but dismiss explicitly.
-      enableDrag: false,
-      builder: (sheetContext) => SafeArea(
-        child: SizedBox(
-          height: 430,
-          child: Column(
-            children: [
-              _SheetDismissHandle(onDismiss: () => Navigator.pop(sheetContext)),
-              Expanded(
-                child: ListView(
-                  children: [
-                    const ListTile(
-                      title: LText(
-                        'Country code',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    for (final item in const [
-                      ('🇮🇳', 'India', '+91'),
-                      ('🇺🇸', 'United States', '+1'),
-                      ('🇩🇪', 'Germany', '+49'),
-                      ('🇨🇦', 'Canada', '+1'),
-                      ('🇦🇪', 'United Arab Emirates', '+971'),
-                    ])
-                      ListTile(
-                        leading: _CountryFlag(flag: item.$1),
-                        title: LText(item.$2),
-                        trailing: Text(item.$3),
-                        onTap: () => Navigator.pop(sheetContext, item.$3),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (!mounted || selection == null) return;
-    setState(() => dial = selection);
-  }
-
   List<Widget> content() {
     switch (step) {
       case 0:
@@ -898,16 +848,22 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SizedBox(
+              const SizedBox(
                 width: 76,
                 height: 56,
-                child: OutlinedButton(
-                  onPressed: busy ? null : countries,
-                  style: OutlinedButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    minimumSize: const Size.fromHeight(56),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.fromBorderSide(
+                      BorderSide(color: Color(0xFFE7E1EA)),
+                    ),
+                    borderRadius: BorderRadius.all(Radius.circular(18)),
                   ),
-                  child: Text('$dial ▾'),
+                  child: Center(
+                    child: Text(
+                      _indiaDialCode,
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -918,7 +874,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   autofillHints: const [AutofillHints.telephoneNumberNational],
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(14),
+                    LengthLimitingTextInputFormatter(10),
                   ],
                   decoration: InputDecoration(
                     labelText: t(context, 'Phone number'),

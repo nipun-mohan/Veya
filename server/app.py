@@ -1,7 +1,9 @@
 """Veya's Sarvam-only speech and writing gateway."""
 import asyncio
 import base64
+from collections import defaultdict, deque
 import html
+import hashlib
 import hmac
 import json
 import os
@@ -21,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from server.costs import CloudBillingCosts
 from server.dashboard import DASHBOARD_HTML, GatewayMetrics, SUBSCRIPTIONS
-from server.privacy import PRIVACY_POLICY_HTML
+from server.privacy import DELETE_ACCOUNT_HTML, PRIVACY_POLICY_HTML, TERMS_OF_SERVICE_HTML
 from server.subscriptions import (
     SubscriptionStore, create_razorpay_subscription, fetch_razorpay_subscription,
     razorpay_configuration, verify_razorpay_checkout, verify_razorpay_webhook,
@@ -32,6 +34,60 @@ load_dotenv(Path(__file__).with_name('.env'))
 
 last_process_duration_ms: int | None = None
 last_process_breakdown_ms: dict[str, int] = {}
+
+
+class SlidingWindowRateLimiter:
+    """Small, dependency-free limiter for a single Cloud Run instance.
+
+    Cloud Armor remains the perimeter control for a multi-instance service,
+    but this protects provider spend and OTP delivery when a request reaches
+    the application.
+    """
+
+    def __init__(self) -> None:
+        self._requests: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = asyncio.Lock()
+
+    async def allow(self, key: str, limit: int, window_seconds: int) -> bool:
+        now = time.monotonic()
+        async with self._lock:
+            entries = self._requests[key]
+            cutoff = now - window_seconds
+            while entries and entries[0] <= cutoff:
+                entries.popleft()
+            if len(entries) >= limit:
+                return False
+            entries.append(now)
+            return True
+
+
+rate_limiter = SlidingWindowRateLimiter()
+
+
+def _rate_key(value: str) -> str:
+    """Avoid retaining raw phone numbers or UIDs in limiter memory."""
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+
+async def enforce_rate_limit(key: str, limit: int, window_seconds: int, message: str) -> None:
+    if not await rate_limiter.allow(key, limit, window_seconds):
+        raise HTTPException(429, message)
+
+
+async def enforce_otp_rate_limit(request: Request, phone: str, action: str) -> None:
+    forwarded = request.headers.get('x-forwarded-for', '')
+    client = forwarded.split(',', 1)[0].strip() or (request.client.host if request.client else 'unknown')
+    # Phone limits stop repeated messages to one number; IP limits bound broad
+    # enumeration attempts. Both values are hashed before they enter memory.
+    await enforce_rate_limit(f'otp-phone:{action}:{_rate_key(phone)}', 4, 15 * 60, 'Too many code requests. Please try again later.')
+    await enforce_rate_limit(f'otp-ip:{action}:{_rate_key(client)}', 15, 15 * 60, 'Too many code requests. Please try again later.')
+
+
+async def enforce_processing_rate_limit(uid: str, operation: str) -> None:
+    await enforce_rate_limit(
+        f'processing:{operation}:{_rate_key(uid)}', 24, 15 * 60,
+        'Too many requests. Please wait a few minutes and try again.',
+    )
 # Secret-manager values can include a terminal newline. Header values cannot.
 SARVAM_API_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 SARVAM_STT_MODEL = os.environ.get('SARVAM_STT_MODEL', 'saaras:v4')
@@ -172,6 +228,7 @@ def firebase_user_for_verified_phone(phone: str) -> str:
 @app.post('/v1/auth/otp/send')
 async def send_phone_otp(body: OtpSendRequest, request: Request):
     """Start MiniMoth WhatsApp-first OTP delivery without exposing its key."""
+    await enforce_otp_rate_limit(request, body.phone, 'send')
     if is_test_otp_phone(body.phone):
         # Keep the client flow identical to a real delivery, while never
         # contacting MiniMoth for this non-customer test identity.
@@ -196,6 +253,7 @@ async def send_phone_otp(body: OtpSendRequest, request: Request):
 async def verify_phone_otp(body: OtpVerifyRequest, request: Request):
     """Verify with MiniMoth then issue Firebase custom auth for Veya services."""
     try:
+        await enforce_otp_rate_limit(request, body.phone, 'verify')
         if is_test_otp_phone(body.phone):
             if not hmac.compare_digest(body.code, TEST_OTP_CODE):
                 raise ValueError('OTP_INVALID')
@@ -241,6 +299,7 @@ async def subscription_checkout(request: Request):
     """Create a Razorpay subscription for the signed-in user."""
     identity = verified_firebase_user(request)
     uid = str(identity['uid'])
+    await enforce_processing_rate_limit(uid, 'subscription-checkout')
     try:
         checkout = await create_razorpay_subscription(
             uid, str(identity.get('phone_number') or '') or None,
@@ -661,23 +720,27 @@ async def measure_process_time(request, call_next):
 
 @app.get('/health')
 def health():
-    return {
-        'ok': True,
-        'speech_provider': 'sarvam',
-        'saaras_transcription_available': True,
-        'saaras_transcription_model': SARVAM_STT_MODEL,
-        'translation_provider': 'sarvam', 'translation_model': 'sarvam-translate:v1',
-        'style_provider': 'sarvam', 'style_model': SARVAM_STYLE_MODEL,
-        'sarvam_key_configured': bool(SARVAM_API_KEY),
-        'last_process_duration_ms': last_process_duration_ms,
-        'last_process_breakdown_ms': last_process_breakdown_ms,
-    }
+    # This endpoint is public for uptime checks. Keep provider and deployment
+    # metadata behind the authenticated internal dashboard.
+    return {'ok': True}
 
 
 @app.get('/privacy', response_class=HTMLResponse, include_in_schema=False)
 def privacy_policy():
     """Public, stable privacy-policy URL for the app and Play Console."""
     return PRIVACY_POLICY_HTML
+
+
+@app.get('/terms', response_class=HTMLResponse, include_in_schema=False)
+def terms_of_service():
+    """Public, stable terms-of-service URL for Veya and Play Console."""
+    return TERMS_OF_SERVICE_HTML
+
+
+@app.get('/delete-account', response_class=HTMLResponse, include_in_schema=False)
+def delete_account():
+    """Public account-deletion instructions required for the Play listing."""
+    return DELETE_ACCOUNT_HTML
 
 
 @app.get('/.well-known/assetlinks.json', include_in_schema=False)
@@ -734,7 +797,8 @@ def internal_overview(request: Request):
 @app.post('/translate')
 async def translate_compat(payload: TranslateRequest, request: Request):
     """Serve older app builds that translate an already-transcribed string."""
-    verified_firebase_user(request)
+    identity = verified_firebase_user(request)
+    await enforce_processing_rate_limit(str(identity['uid']), 'translate')
     ensure_sarvam()
     ensure_language(payload.source_language)
     try:
@@ -755,7 +819,8 @@ async def transcribe_compat(
     request: Request, file: UploadFile = File(...), source_language: str = Form(...),
 ):
     """Serve older app builds that upload audio before calling /translate."""
-    verified_firebase_user(request)
+    identity = verified_firebase_user(request)
+    await enforce_processing_rate_limit(str(identity['uid']), 'transcribe')
     ensure_sarvam()
     ensure_language(source_language)
     try:
@@ -792,7 +857,8 @@ async def transcribe_compat(
 
 @app.post('/styles')
 async def deferred_styles(req: DeferredStylesRequest, request: Request):
-    verified_firebase_user(request)
+    identity = verified_firebase_user(request)
+    await enforce_processing_rate_limit(str(identity['uid']), 'styles')
     ensure_sarvam()
     ensure_language(req.source_language)
     try:
@@ -815,7 +881,8 @@ async def deferred_styles_raw(request: Request):
     """Accept opaque style payloads without asking the edge WAF to parse text."""
     if request.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/octet-stream':
         raise HTTPException(415, 'Use the Veya style payload format.')
-    verified_firebase_user(request)
+    identity = verified_firebase_user(request)
+    await enforce_processing_rate_limit(str(identity['uid']), 'styles')
     try:
         encoded = await request.body()
         decoded = base64.urlsafe_b64decode(encoded + b'=' * (-len(encoded) % 4))
@@ -847,7 +914,8 @@ async def process_audio_bytes(
     content_type: str,
 ):
     global last_process_breakdown_ms
-    verified_firebase_user(request)
+    identity = verified_firebase_user(request)
+    await enforce_processing_rate_limit(str(identity['uid']), 'audio')
     ensure_sarvam()
     ensure_language(source_language)
     try:
@@ -921,7 +989,8 @@ async def stream_audio(websocket: WebSocket):
     stream_started = False
     stream_outcome = 'failed'
     try:
-        verified_firebase_socket(websocket)
+        identity = verified_firebase_socket(websocket)
+        await enforce_processing_rate_limit(str(identity['uid']), 'stream')
         ensure_sarvam()
         source_language = websocket.query_params.get('source_language', '')
         ensure_language(source_language)

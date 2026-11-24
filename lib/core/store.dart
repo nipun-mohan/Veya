@@ -62,8 +62,10 @@ class VeyaStore extends ChangeNotifier {
       'VEYA_API_URL',
       defaultValue: 'https://api.heyveya.app',
     );
-    // Replace development-only LAN endpoints when the production app updates.
-    // A release build may still override this endpoint with --dart-define.
+    // A production app must never inherit a development or custom endpoint
+    // that a previous build saved on the device. The gateway URL is public
+    // configuration, but pinning it prevents recordings and ID tokens from
+    // being sent to an arbitrary host after an upgrade.
     final normalizedSavedEndpoint = savedEndpoint?.trim() ?? '';
     final savedHost = Uri.tryParse(normalizedSavedEndpoint)?.host ?? '';
     final isDevelopmentEndpoint = savedHost.startsWith('192.168.');
@@ -72,10 +74,11 @@ class VeyaStore extends ChangeNotifier {
     final isRetiredGateway =
         savedHost == 'veya-gateway-233466884801.asia-south1.run.app' ||
         savedHost == 'veya-gateway-iy75dfhiia-el.a.run.app';
-    endpoint =
-        normalizedSavedEndpoint.isNotEmpty &&
-            !isDevelopmentEndpoint &&
-            !isRetiredGateway
+    endpoint = kReleaseMode
+        ? builtEndpoint
+        : normalizedSavedEndpoint.isNotEmpty &&
+              !isDevelopmentEndpoint &&
+              !isRetiredGateway
         ? normalizedSavedEndpoint
         : builtEndpoint;
     floatingIconScale = (prefs.getDouble('floatingIconScale') ?? 1)
@@ -110,31 +113,21 @@ class VeyaStore extends ChangeNotifier {
   }
 
   Future<void> syncNative() async {
-    final user = FirebaseAuth.instance.currentUser;
-    String? refreshedToken;
-    if (user != null) {
-      // Native configuration must never prevent the app from completing
-      // onboarding. The assistant performs its own silent refresh on Android.
-      try {
-        refreshedToken = await user.getIdToken(true);
-      } catch (_) {
-        refreshedToken = null;
-      }
-    }
-    if (refreshedToken != null && refreshedToken.isNotEmpty) {
-      await secure.write(key: 'veya_firebase_id_token', value: refreshedToken);
-    }
+    // The accessibility service normally retrieves a short-lived Firebase ID
+    // token from the native SDK. Also hand the currently signed-in session to
+    // it in memory: immediately after custom-token sign-in the service can be
+    // active before native Firebase has restored its own state. This value is
+    // never written to preferences or disk.
+    final firebaseIdToken = await FirebaseAuth.instance.currentUser
+        ?.getIdToken();
     await AndroidBridge.call('configure', {
       'endpoint': endpoint,
       'language': language,
       'uiLanguage': uiLanguage,
+      'firebaseIdToken': firebaseIdToken,
       'allowedApps': allowedApps,
       'floatingIconScale': floatingIconScale,
       'floatingIconOpacity': floatingIconOpacity,
-      'firebaseIdToken':
-          refreshedToken ??
-          await secure.read(key: 'veya_firebase_id_token') ??
-          '',
     });
   }
 
@@ -264,7 +257,6 @@ class VeyaStore extends ChangeNotifier {
       prefs.remove('profile_setup_step'),
       prefs.remove('phoneOtpVerified'),
       prefs.remove('profileName'),
-      secure.delete(key: 'veya_firebase_id_token'),
       secure.delete(key: 'veya_profile_phone'),
       secure.delete(key: 'veya_account_session'),
       secure.delete(key: 'veya_account_phone'),
@@ -273,7 +265,6 @@ class VeyaStore extends ChangeNotifier {
     phoneCountryCode = '+91';
     phoneNationalNumber = '';
     subscription = null;
-    // Clear the native assistant's cached credential as well.
     await AndroidBridge.call('configure', {
       'endpoint': endpoint,
       'language': language,
@@ -281,7 +272,6 @@ class VeyaStore extends ChangeNotifier {
       'allowedApps': const <String>[],
       'floatingIconScale': floatingIconScale,
       'floatingIconOpacity': floatingIconOpacity,
-      'firebaseIdToken': '',
     });
     notifyListeners();
   }

@@ -81,10 +81,12 @@ class SubscriptionApi {
   const SubscriptionApi(this.baseUrl);
 
   Future<SubscriptionStatus> status() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/v1/subscription'),
-      headers: {'Authorization': 'Bearer ${await _token()}'},
-    );
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/v1/subscription'),
+          headers: {'Authorization': 'Bearer ${await _token()}'},
+        )
+        .timeout(const Duration(seconds: 10));
     if (response.statusCode != 200)
       throw StateError('Could not load subscription details.');
     return SubscriptionStatus.fromJson(
@@ -93,10 +95,12 @@ class SubscriptionApi {
   }
 
   Future<RazorpaySubscriptionSession> createCheckout() async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/v1/subscription/checkout'),
-      headers: {'Authorization': 'Bearer ${await _token()}'},
-    );
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/v1/subscription/checkout'),
+          headers: {'Authorization': 'Bearer ${await _token()}'},
+        )
+        .timeout(const Duration(seconds: 15));
     if (response.statusCode != 200)
       throw StateError('Could not start the subscription checkout.');
     return RazorpaySubscriptionSession.fromJson(
@@ -109,18 +113,20 @@ class SubscriptionApi {
     required String paymentId,
     required String signature,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/v1/subscription/verify'),
-      headers: {
-        'Authorization': 'Bearer ${await _token()}',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'subscription_id': subscriptionId,
-        'payment_id': paymentId,
-        'signature': signature,
-      }),
-    );
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/v1/subscription/verify'),
+          headers: {
+            'Authorization': 'Bearer ${await _token()}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'subscription_id': subscriptionId,
+            'payment_id': paymentId,
+            'signature': signature,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
     if (response.statusCode != 200)
       throw StateError('Could not verify the payment.');
     return SubscriptionStatus.fromJson(
@@ -131,7 +137,7 @@ class SubscriptionApi {
   Future<String> _token() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) throw StateError('Sign in is required.');
-    final token = await user.getIdToken();
+    final token = await user.getIdToken().timeout(const Duration(seconds: 8));
     if (token == null || token.isEmpty)
       throw StateError('Your session expired.');
     return token;

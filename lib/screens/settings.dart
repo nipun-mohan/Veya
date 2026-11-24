@@ -1,4 +1,5 @@
 import '../core/localization.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/material.dart';
 import '../core/store.dart';
 import '../core/theme.dart';
@@ -17,6 +18,11 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen>
     with WidgetsBindingObserver {
+  // Compiled on only for an explicitly named test build. This control is not
+  // present in the Play production artifact.
+  static const _crashlyticsTestEnabled = bool.fromEnvironment(
+    'VEYA_CRASHLYTICS_TEST',
+  );
   bool enabled = false;
   @override
   void initState() {
@@ -207,6 +213,33 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
+  Future<void> _forceCrashlyticsTest() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const LText('Send test crash?'),
+        content: const LText(
+          'This intentionally closes Veya and sends a test report to Firebase Crashlytics.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const LText('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const LText('Crash app'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      // Native crash verifies the full Android Crashlytics pipeline, including
+      // the Gradle plugin and mapping upload configuration.
+      FirebaseCrashlytics.instance.crash();
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Stack(
     children: [
@@ -342,6 +375,17 @@ class _SettingsScreenState extends State<SettingsScreen>
                   trailing: const SizedBox.shrink(),
                   onTap: _logout,
                 ),
+                if (_crashlyticsTestEnabled) ...[
+                  const Divider(),
+                  _PreferenceRow(
+                    icon: Icons.bug_report_outlined,
+                    title: 'Crashlytics test crash',
+                    subtitle: 'Only available in this test build',
+                    titleColor: VeyaColors.orange,
+                    iconColor: VeyaColors.orange,
+                    onTap: _forceCrashlyticsTest,
+                  ),
+                ],
               ],
             ),
           ),

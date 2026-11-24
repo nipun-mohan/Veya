@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,6 +30,7 @@ class VeyaBootstrap extends StatefulWidget {
 
 class _VeyaBootstrapState extends State<VeyaBootstrap> {
   VeyaStore? _store;
+  bool _startupFailed = false;
 
   @override
   void initState() {
@@ -35,28 +39,98 @@ class _VeyaBootstrapState extends State<VeyaBootstrap> {
   }
 
   Future<void> _load() async {
-    await Firebase.initializeApp();
-    await VeyaStrings.preload();
-    final store = VeyaStore(await SharedPreferences.getInstance());
-    // Load appearance and assistant settings before rendering Settings. This
-    // prevents a delayed load from replacing a newly adjusted slider value.
-    await store.load();
-    // Require one real Firebase verification before granting access to the
-    // protected flow.
-    if (store.onboarded && FirebaseAuth.instance.currentUser == null) {
-      store.onboarded = false;
-      await store.persist();
+    // Do not keep the user on the launch view while a plugin, secure storage,
+    // or network-backed token restoration is slow. The app can render its
+    // local sign-in flow first and hydrate the saved account in the background.
+    try {
+      final prefs = await SharedPreferences.getInstance().timeout(
+        const Duration(seconds: 4),
+      );
+      final store = VeyaStore(prefs);
+      if (!mounted) return;
+      setState(() {
+        _store = store;
+        _startupFailed = false;
+      });
+      unawaited(_hydrate(store));
+    } catch (_) {
+      // A failed platform-channel read must not leave the user on the brand
+      // animation indefinitely. Surface a retryable screen instead.
+      if (mounted) setState(() => _startupFailed = true);
     }
-    if (mounted) setState(() => _store = store);
+  }
+
+  Future<void> _hydrate(VeyaStore store) async {
+    var firebaseReady = false;
+    try {
+      await Firebase.initializeApp().timeout(const Duration(seconds: 6));
+      firebaseReady = true;
+      _configureCrashReporting();
+      await _configureAnalytics();
+    } catch (_) {
+      // A temporary Firebase or device-service failure must never leave the
+      // application frozen on its splash screen. Login will surface a useful
+      // error if Firebase is still unavailable when it is actually needed.
+    }
+
+    try {
+      await VeyaStrings.preload().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      // The localization delegate falls back to the bundled English labels.
+    }
+
+    try {
+      await store.load().timeout(const Duration(seconds: 5));
+      // Require one real Firebase verification before restoring the protected
+      // route from a prior session.
+      if (firebaseReady &&
+          store.onboarded &&
+          FirebaseAuth.instance.currentUser == null) {
+        store.onboarded = false;
+        await store.persist().timeout(const Duration(seconds: 3));
+      }
+    } catch (_) {
+      // `store` was already supplied to the widget tree with safe defaults.
+      // Leave the user at sign-in rather than trapping them on the launch view.
+    }
+  }
+
+  void _configureCrashReporting() {
+    // Crashlytics receives native Android crashes automatically. These two
+    // handlers also report uncaught Flutter and async errors with a usable
+    // stack trace, without affecting the user-facing error flow.
+    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+    PlatformDispatcher.instance.onError = (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      return true;
+    };
+  }
+
+  Future<void> _configureAnalytics() async {
+    // Firebase Analytics automatically records app lifecycle events and the
+    // observer below records screen views. Do not attach phone numbers, OTPs,
+    // message content, or other sensitive data to Analytics.
+    await FirebaseAnalytics.instance.setAnalyticsCollectionEnabled(true);
   }
 
   @override
-  Widget build(BuildContext context) => VeyaApp(store: _store);
+  Widget build(BuildContext context) => VeyaApp(
+    store: _store,
+    startupFailed: _startupFailed,
+    retryStartup: _load,
+  );
 }
 
 class VeyaApp extends StatelessWidget {
   final VeyaStore? store;
-  const VeyaApp({super.key, required this.store});
+  final bool startupFailed;
+  final VoidCallback retryStartup;
+  const VeyaApp({
+    super.key,
+    required this.store,
+    required this.startupFailed,
+    required this.retryStartup,
+  });
   @override
   Widget build(BuildContext context) {
     final current = store;
@@ -72,16 +146,60 @@ class VeyaApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
+      navigatorObservers: [
+        FirebaseAnalyticsObserver(analytics: FirebaseAnalytics.instance),
+      ],
       home: VeyaSplash(
         ready: current != null,
         child: current == null
-            ? const SizedBox.shrink()
+            ? _StartupRecovery(failed: startupFailed, onRetry: retryStartup)
             : ListenableBuilder(
                 listenable: current,
                 builder: (context, _) => current.onboarded
                     ? HomeShell(store: current)
                     : OnboardingScreen(store: current),
               ),
+      ),
+    );
+  }
+}
+
+class _StartupRecovery extends StatelessWidget {
+  final bool failed;
+  final VoidCallback onRetry;
+  const _StartupRecovery({required this.failed, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!failed) {
+      return const Scaffold(
+        backgroundColor: VeyaColors.paper,
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return Scaffold(
+      backgroundColor: VeyaColors.paper,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Veya needs a moment to start.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Please check your connection and try again.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              FilledButton(onPressed: onRetry, child: const Text('Try again')),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -104,13 +222,20 @@ class _VeyaSplashState extends State<VeyaSplash>
   Timer? _fallback;
   bool _complete = false;
   bool _animationDone = false;
+  bool _showFallback = false;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this);
     // If the asset ever fails to decode, users still reach the app promptly.
-    _fallback = Timer(const Duration(seconds: 5), _animationFinished);
+    _fallback = Timer(const Duration(seconds: 5), () {
+      _animationFinished();
+      if (mounted && !widget.ready) {
+        setState(() => _showFallback = true);
+        _tryFinish();
+      }
+    });
   }
 
   @override
@@ -125,7 +250,7 @@ class _VeyaSplashState extends State<VeyaSplash>
   }
 
   void _tryFinish() {
-    if (!_animationDone || !widget.ready) return;
+    if (!_animationDone || (!widget.ready && !_showFallback)) return;
     if (!mounted || _complete) return;
     _fallback?.cancel();
     setState(() => _complete = true);

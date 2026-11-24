@@ -40,7 +40,13 @@ curl http://127.0.0.1:8080/health
 - Route HTTPS traffic to the container's `PORT`.
 - Configure at least 1 CPU, 512 MB RAM, and a request timeout of 90 seconds.
 - Set a maximum instance count and billing alerts before exposing the service.
-- Put a gateway/auth layer in front of the public API before releasing Veya to users. A static mobile-app token is not sufficient protection because it can be extracted from an APK.
+- The gateway verifies Firebase ID tokens and applies per-instance OTP and
+  processing limits. Add a Cloud Armor rate-limit policy before production as
+  well: Cloud Run can scale to multiple instances, so app-memory limits alone
+  are not a perimeter control.
+- Enable and enforce Firebase App Check for the mobile project before broad
+  rollout. Never use a static mobile-app token; it can be extracted from an
+  APK.
 
 After deployment, set Veya's **Server translation** setting to the new HTTPS base URL, for example `https://api.example.com`.
 
@@ -98,3 +104,13 @@ Razorpay Dashboard, so they are not overridden by the mobile app.
 
 Subscription state is informational during this rollout: no voice, translation,
 assistant, or insertion feature is restricted.
+
+## Configuration boundaries
+
+Firebase Remote Config is suitable for non-sensitive rollout controls such as
+feature flags, maintenance messaging, and client minimum-version notices. It
+is not a secret store: any value sent to a mobile app can be read by that app.
+Keep Sarvam, MiniMoth, Razorpay, webhook, dashboard, and service-account
+credentials in Secret Manager. Keep the production gateway hostname pinned in
+the signed app; route or fail over the hostname at DNS/load-balancer level
+rather than accepting an arbitrary Remote Config URL.

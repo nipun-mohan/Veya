@@ -10,7 +10,6 @@ import android.graphics.drawable.GradientDrawable
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.util.Base64
 import android.util.Log
 import android.hardware.*
 import android.os.*
@@ -19,6 +18,7 @@ import android.view.accessibility.*
 import android.view.animation.OvershootInterpolator
 import android.widget.*
 import com.google.android.gms.tasks.Tasks
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONObject
 import java.io.File
@@ -44,7 +44,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   // Firebase ID tokens are valid for one hour. Refresh before the boundary so
   // the assistant never has to interrupt a recording to recover a session.
   private const val TOKEN_REFRESH_INTERVAL_MINUTES = 55L
-  private const val CACHED_TOKEN_MIN_VALIDITY_MS = 30_000L
+  private const val TOKEN_FORCE_REFRESH_AFTER_MS = 45 * 60 * 1_000L
  }
  private val main = Handler(Looper.getMainLooper())
  private val worker = Executors.newSingleThreadExecutor()
@@ -76,6 +76,7 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
  private val streamWorker = Executors.newSingleThreadExecutor()
  private var recordingFile: File? = null
  @Volatile private var recordingAmplitude=0
+ @Volatile private var lastSuccessfulTokenRefreshAt = 0L
  @Volatile private var lastSpeechAt = 0L
  @Volatile private var heardSpeech = false
  // Read by the PCM worker and written on the accessibility/main thread. A
@@ -138,6 +139,9 @@ class FloatingAssistant : AccessibilityService(), SensorEventListener {
   }
  }
  override fun onServiceConnected() {
+  // AccessibilityService can start without Flutter ever creating an Activity.
+  // Initialise Firebase explicitly so its persisted Auth session is available.
+  FirebaseApp.initializeApp(applicationContext)
   instance = this
   sensor = getSystemService(SENSOR_SERVICE) as SensorManager
   sensor?.registerListener(this, sensor?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), SensorManager.SENSOR_DELAY_UI)
@@ -589,88 +593,113 @@ private fun cancel() {
   if(streamRecorder?.state != AudioRecord.STATE_INITIALIZED) error("Could not start the microphone.")
   streamRequestId=id
   val audio=streamRecorder ?: return
-  // Start microphone capture before the network handshake. OkHttp queues the
-  // first audio frames until the WebSocket is open, so the user can speak as
-  // soon as they tap the Veya bubble instead of waiting on network latency.
+  // Capture starts immediately; obtaining or refreshing an Auth token happens
+  // off the accessibility-service main thread.
   runCatching { audio.startRecording() }.onFailure { error ->
    Log.e("VeyaAssistant", "PCM recorder startup failed", error)
    cancel(); failure("Could not start the microphone.")
    return
   }
-  val request=Request.Builder()
-   .url("$streamEndpoint/stream?source_language=${java.net.URLEncoder.encode(language, "UTF-8")}")
-   // Configuration from Flutter refreshes and persists this token whenever
-   // Veya opens. Reading it here avoids a network-bound Firebase refresh on
-   // the recording tap; the WebSocket can begin microphone capture at once.
-   .apply { cachedFirebaseToken()?.let { header("Authorization", "Bearer $it") } }
-   .build()
-  val socket=streamClient.newWebSocket(request, object : WebSocketListener() {
-   override fun onOpen(socket: WebSocket, response: Response) {
-    if(id != streamRequestId || state != "recording") {
-     socket.send(JSONObject().put("event", "cancel").toString()); socket.close(1000,"cancelled"); return
-    }
-   }
-   override fun onMessage(socket: WebSocket, text: String) {
-    val data=runCatching { JSONObject(text) }.getOrNull() ?: return
-    when(data.optString("type")) {
-     "partial" -> Log.d("VeyaAssistant", "Sarvam partial: ${data.optString("text")}")
-     "result" -> main.post {
-      if(id == streamRequestId) { streamSocket=null; results(data) }
-     }
-     "error" -> main.post {
-      if(id == streamRequestId) { streamSocket=null; failure(data.optString("message", "We couldn't process that recording. Please try again.")) }
-     }
-    }
-   }
-   override fun onFailure(socket: WebSocket, throwable: Throwable, response: Response?) {
-    Log.e("VeyaAssistant", "Sarvam stream failed", throwable)
+  openSarvamStream(id, "$streamEndpoint/stream?source_language=${java.net.URLEncoder.encode(language, "UTF-8")}", audio)
+ }
+
+ private fun openSarvamStream(id: Int, url: String, audio: AudioRecord, forceRefresh: Boolean = false) {
+  tokenWorker.execute {
+   val token=activeFirebaseToken(forceRefresh)
+   if (id != streamRequestId || state != "recording" || streamRecorder !== audio) return@execute
+   if (token.isNullOrBlank()) {
     main.post {
-     if(id == streamRequestId && state != "idle") {
-      streamSocket=null
-      failure("We couldn't process that recording. Please try again.")
+     if (id == streamRequestId && state == "recording") {
+      cancel()
+      failure("Your Veya sign-in has expired. Open Veya and sign in again.")
      }
     }
+    return@execute
    }
-   override fun onClosing(socket: WebSocket, code: Int, reason: String) {
-    socket.close(code, reason)
-    main.post {
-     if(id == streamRequestId && state == "generating") {
-      streamSocket=null
-      failure("The transcription stream closed before completing. Please try again.")
+   val request=Request.Builder().url(url).header("Authorization", "Bearer $token").build()
+   val socket=streamClient.newWebSocket(request, object : WebSocketListener() {
+    override fun onOpen(socket: WebSocket, response: Response) {
+     if(id != streamRequestId || state != "recording") {
+      socket.send(JSONObject().put("event", "cancel").toString()); socket.close(1000,"cancelled"); return
+     }
+     // Do not send PCM until the WebSocket upgrade has completed. Calling
+     // send() while OkHttp is still connecting returns false; that was most
+     // visible after the service had been idle, when the first connection can
+     // take longer and Sarvam consequently received an empty stream.
+     streamWorker.execute { pumpStreamAudio(id, audio, socket) }
+    }
+    override fun onMessage(socket: WebSocket, text: String) {
+     val data=runCatching { JSONObject(text) }.getOrNull() ?: return
+     when(data.optString("type")) {
+      "partial" -> Log.d("VeyaAssistant", "Sarvam partial: ${data.optString("text")}")
+      "result" -> main.post {
+       if(id == streamRequestId) { streamSocket=null; results(data) }
+      }
+      "error" -> main.post {
+       if(id == streamRequestId) { streamSocket=null; failure(data.optString("message", "We couldn't process that recording. Please try again.")) }
+      }
      }
     }
-   }
-   override fun onClosed(socket: WebSocket, code: Int, reason: String) {
-    main.post {
-     if(id == streamRequestId && state == "generating") {
-      streamSocket=null
-      failure("The transcription stream closed before completing. Please try again.")
+    override fun onFailure(socket: WebSocket, throwable: Throwable, response: Response?) {
+     Log.e("VeyaAssistant", "Sarvam stream failed (HTTP ${response?.code})", throwable)
+     // A token may have expired between the scheduled refresh and the socket
+     // handshake. Refresh it silently and retry this same recording once.
+     if ((response?.code == 401 || response?.code == 403) && !forceRefresh) {
+      if (id == streamRequestId && state == "recording") {
+       streamSocket=null
+       openSarvamStream(id, url, audio, forceRefresh = true)
+      }
+      return
+     }
+     main.post {
+      if(id == streamRequestId && state != "idle") {
+       streamSocket=null
+       failure(if (response?.code == 401 || response?.code == 403)
+        "Veya could not refresh your session. Check your connection and try again."
+        else "We couldn't process that recording. Please try again.")
+      }
      }
     }
-   }
-  })
-  streamSocket=socket
-  streamWorker.execute {
-   val chunk=ByteArray(3200) // 100 ms of mono linear16 at 16 kHz.
-   while(state == "recording" && id == streamRequestId && streamRecorder === audio) {
-    val count=audio.read(chunk,0,chunk.size)
-    if(count <= 0) continue
-    var peak=0
-    var index=0
-    while(index + 1 < count) {
-     val sample=((chunk[index].toInt() and 0xff) or (chunk[index + 1].toInt() shl 8))
-     peak=max(peak, abs(sample.toShort().toInt())); index += 2
+    override fun onClosing(socket: WebSocket, code: Int, reason: String) {
+     socket.close(code, reason)
+     main.post {
+      if(id == streamRequestId && state == "generating") {
+       streamSocket=null
+       failure("The transcription stream closed before completing. Please try again.")
+      }
+     }
     }
-    recordingAmplitude=peak
-    if (peak >= VOICE_ACTIVITY_THRESHOLD) {
-     heardSpeech=true
-     lastSpeechAt=SystemClock.elapsedRealtime()
+    override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+     main.post {
+      if(id == streamRequestId && state == "generating") {
+       streamSocket=null
+       failure("The transcription stream closed before completing. Please try again.")
+      }
+     }
     }
-    val encoded=android.util.Base64.encodeToString(
-     chunk.copyOf(count), android.util.Base64.NO_WRAP,
-    )
-    if(!socket.send(JSONObject().put("event", "audio").put("audio", encoded).toString())) break
+   })
+   streamSocket=socket
+  }
+ }
+
+ private fun pumpStreamAudio(id: Int, audio: AudioRecord, socket: WebSocket) {
+  val chunk=ByteArray(3200) // 100 ms of mono linear16 at 16 kHz.
+  while(state == "recording" && id == streamRequestId && streamRecorder === audio) {
+   val count=audio.read(chunk,0,chunk.size)
+   if(count <= 0) continue
+   var peak=0
+   var index=0
+   while(index + 1 < count) {
+    val sample=((chunk[index].toInt() and 0xff) or (chunk[index + 1].toInt() shl 8))
+    peak=max(peak, abs(sample.toShort().toInt())); index += 2
    }
+   recordingAmplitude=peak
+   if (peak >= VOICE_ACTIVITY_THRESHOLD) {
+    heardSpeech=true
+    lastSpeechAt=SystemClock.elapsedRealtime()
+   }
+   val encoded=android.util.Base64.encodeToString(chunk.copyOf(count), android.util.Base64.NO_WRAP)
+   if(!socket.send(JSONObject().put("event", "audio").put("audio", encoded).toString())) break
   }
  }
  private fun recorderControls() {
@@ -807,28 +836,28 @@ private fun cancel() {
   }
  }
  private fun activeFirebaseToken(forceRefresh: Boolean=false): String? {
+  val now=SystemClock.elapsedRealtime()
+  // Do not rely solely on the periodic job: Android can restart an
+  // AccessibilityService after the app has been idle. The first recording in
+  // that service instance refreshes its Firebase token silently.
+  val refreshNow=forceRefresh || now-lastSuccessfulTokenRefreshAt >= TOKEN_FORCE_REFRESH_AFTER_MS
   val refreshed=runCatching {
    val user=FirebaseAuth.getInstance().currentUser ?: return@runCatching null
-   Tasks.await(user.getIdToken(forceRefresh),20,TimeUnit.SECONDS).token
+   Tasks.await(user.getIdToken(refreshNow),20,TimeUnit.SECONDS).token
+  }.onFailure {
+   Log.w("VeyaAssistant", "Firebase token request failed", it)
   }.getOrNull()
-  if(!refreshed.isNullOrBlank()) prefs.edit().putString("firebaseIdToken",refreshed).apply()
-  // Never retry a gateway request with a locally cached token after it has
-  // expired. That was the source of the visible “invalid token” error when a
-  // Firebase refresh briefly failed at the one-hour boundary.
-  return refreshed ?: cachedFirebaseToken()
- }
- private fun cachedFirebaseToken(): String? {
-  val token = prefs.getString("firebaseIdToken", "")?.takeIf { it.isNotBlank() } ?: return null
-  return runCatching {
-   val parts = token.split('.')
-   if (parts.size != 3) return@runCatching null
-   val payload = String(
-    Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
-    Charsets.UTF_8,
-   )
-   val expiresAtMillis = JSONObject(payload).optLong("exp", 0L) * 1_000L
-   token.takeIf { expiresAtMillis > System.currentTimeMillis() + CACHED_TOKEN_MIN_VALIDITY_MS }
-  }.getOrNull()
+  if (!refreshed.isNullOrBlank()) {
+   lastSuccessfulTokenRefreshAt=now
+   return refreshed
+  }
+  // Only use the Flutter-to-service handoff before it could have expired.
+  // It is never written to disk and is deliberately never reused on a forced
+  // refresh after an authentication response from the gateway.
+  val memoryToken=MainActivity.inMemoryFirebaseIdToken
+  return memoryToken?.takeIf {
+   !forceRefresh && now-MainActivity.inMemoryFirebaseTokenReceivedAt < TOKEN_FORCE_REFRESH_AFTER_MS
+  }
  }
 
  /** Called from Flutter configuration and by the active accessibility service. */
@@ -848,17 +877,7 @@ private fun cancel() {
  }
 
  private fun refreshFirebaseTokenSilently() {
-  val user = FirebaseAuth.getInstance().currentUser ?: return
-  val token = runCatching {
-   Tasks.await(user.getIdToken(true), 20, TimeUnit.SECONDS).token
-  }.onFailure {
-   // This is intentionally non-blocking and has no UI effect. The existing
-   // request-time forced refresh remains the recovery path for transient loss
-   // of connectivity.
-   Log.w("VeyaAssistant", "Silent Firebase token refresh failed", it)
-  }.getOrNull()
-  if (!token.isNullOrBlank()) {
-   prefs.edit().putString("firebaseIdToken", token).apply()
+  if (!activeFirebaseToken(forceRefresh = true).isNullOrBlank()) {
    Log.d("VeyaAssistant", "Firebase ID token refreshed silently")
   }
  }
